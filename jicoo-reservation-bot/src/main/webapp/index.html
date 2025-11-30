@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jicoo 自動予約 BOT</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="header">
+        <h1>Jicoo 自動予約 BOT</h1>
+        <div class="status-bar">
+          <span id="status-label">状態: 待機中</span>
+          <span class="separator">|</span>
+          <span>監視時間制限:</span>
+          <button id="monitoring-time-toggle" class="toggle-btn toggle-on">
+            ON
+          </button>
+          <span id="monitoring-time-status" class="status-text"
+            >監視時間内</span
+          >
+        </div>
+      </header>
+
+      <main class="main-content">
+        <!-- 日付管理セクション -->
+        <section class="date-management">
+          <h2>予約対象日付管理</h2>
+
+          <!-- 日付追加パネル -->
+          <div class="add-date-panel">
+            <label for="date-picker" class="date-picker-label"
+              >日付を選択:</label
+            >
+            <input type="date" id="date-picker" class="date-picker" />
+            <button id="add-date-btn" class="btn btn-primary">追加</button>
+          </div>
+
+          <!-- カレンダー -->
+          <div class="calendar-container">
+            <div class="calendar-header">
+              <button id="prev-month-btn" class="calendar-nav-btn">◀</button>
+              <span id="calendar-month-year" class="calendar-month-year"></span>
+              <button id="next-month-btn" class="calendar-nav-btn">▶</button>
+            </div>
+            <div id="calendar" class="calendar"></div>
+          </div>
+
+          <!-- 日付リスト -->
+          <div id="date-list" class="date-list"></div>
+        </section>
+
+        <!-- ログセクション -->
+        <section class="log-section">
+          <h2>ログ出力</h2>
+          <div id="log-area" class="log-area"></div>
+        </section>
+
+        <!-- 操作パネル -->
+        <section class="control-panel">
+          <h2>操作パネル</h2>
+          <div class="button-group">
+            <button id="start-btn" class="btn btn-success btn-large">
+              監視開始
+            </button>
+            <button id="stop-btn" class="btn btn-danger btn-large" disabled>
+              監視停止
+            </button>
+          </div>
+
+          <div class="completed-reservations">
+            <h3>予約完了日</h3>
+            <div id="completed-list" class="completed-list"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/webapp/app.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+node_modules/
+target/
+*.log
+.DS_Store
+*.class
+*.jar
+!target/jicoo-reservation-bot-1.0.0.jar
+
