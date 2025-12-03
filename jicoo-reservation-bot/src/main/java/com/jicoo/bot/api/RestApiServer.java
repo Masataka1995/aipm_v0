@@ -64,9 +64,14 @@ public class RestApiServer {
             
             @Override
             public void onReservationResult(LocalDate date, boolean success, List<String> timeSlots) {
-                dateManager.setReservationResult(date, success, timeSlots);
-                // WebSocketでクライアントに通知
-                WebSocketHandler.broadcastReservationResult(date, success);
+                onReservationResult(date, success, timeSlots, null);
+            }
+            
+            @Override
+            public void onReservationResult(LocalDate date, boolean success, List<String> timeSlots, String teacherUrl) {
+                dateManager.setReservationResult(date, success, timeSlots, teacherUrl);
+                // WebSocketでクライアントに通知（時間帯と先生URL情報付き）
+                WebSocketHandler.broadcastReservationResult(date, success, timeSlots, teacherUrl);
             }
         });
         

@@ -14,6 +14,15 @@ let allDates = []; // 全日付データ（カレンダー表示用）
   function init() {
     console.log("初期化を開始します");
     try {
+      // ブラウザ通知の許可をリクエスト
+      if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission().then((permission) => {
+          if (permission === "granted") {
+            appendLog("ブラウザ通知が有効になりました", "success");
+          }
+        });
+      }
+
       // まずイベントリスナーを設定
       setupEventListeners();
 
@@ -55,8 +64,8 @@ function initializeWebSocket() {
     ws.close();
   }
 
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${protocol}//${window.location.host}/ws`;
+  const protocol = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
+  const wsUrl = `${protocol}//${globalThis.location.host}/ws`;
   console.log("WebSocket接続を試みます:", wsUrl);
 
   try {
@@ -125,7 +134,10 @@ function handleWebSocketMessage(data) {
       appendLog(data.message, "info");
       break;
     case "reservationResult":
-      updateReservationResult(data.date, data.success);
+      // 時間帯情報と先生URLも受け取る
+      const timeSlots = data.timeSlots || [];
+      const teacherUrl = data.teacherUrl || "";
+      updateReservationResult(data.date, data.success, timeSlots, teacherUrl);
       break;
     case "status":
       updateStatus(data.status);
@@ -237,10 +249,20 @@ function setupEventListeners() {
         if (response.ok) {
           const startBtn = document.getElementById("start-btn");
           const stopBtn = document.getElementById("stop-btn");
-          if (startBtn) startBtn.disabled = true;
+          if (startBtn) {
+            startBtn.disabled = true;
+            startBtn.innerHTML = '<span class="loading"></span> 監視開始中...';
+          }
           if (stopBtn) stopBtn.disabled = false;
           updateStatus("実行中");
-          appendLog("監視を開始しました", "info");
+          appendLog("監視を開始しました", "success");
+
+          // ボタンのテキストを元に戻す（少し遅延して）
+          setTimeout(() => {
+            if (startBtn) {
+              startBtn.innerHTML = '<span class="btn-icon">▶</span> 監視開始';
+            }
+          }, 1000);
         } else {
           const errorText = await response.text();
           console.error("監視開始エラー:", response.status, errorText);
@@ -281,6 +303,18 @@ function setupEventListeners() {
       } catch (error) {
         console.error("監視停止エラー:", error);
         appendLog("監視の停止に失敗しました", "error");
+      }
+    });
+  }
+
+  // ログクリアボタン
+  const clearLogBtn = document.getElementById("clear-log-btn");
+  if (clearLogBtn) {
+    clearLogBtn.addEventListener("click", () => {
+      const logArea = document.getElementById("log-area");
+      if (logArea) {
+        logArea.innerHTML = "";
+        appendLog("ログをクリアしました", "info");
       }
     });
   }
@@ -476,7 +510,7 @@ function renderTimeSlots(date, selectedSlots) {
 }
 
 // 日付ON/OFF切り替え（グローバルスコープに公開）
-window.toggleDate = async function toggleDate(dateStr) {
+globalThis.toggleDate = async function toggleDate(dateStr) {
   try {
     // 現在の状態を取得
     const datesResponse = await fetch(`${API_BASE}/dates`);
@@ -505,7 +539,7 @@ window.toggleDate = async function toggleDate(dateStr) {
 };
 
 // 日付削除（グローバルスコープに公開）
-window.removeDate = async function removeDate(dateStr) {
+globalThis.removeDate = async function removeDate(dateStr) {
   if (!confirm("この日付を削除しますか？")) {
     return;
   }
@@ -530,7 +564,7 @@ window.removeDate = async function removeDate(dateStr) {
 };
 
 // 時間帯更新（グローバルスコープに公開）
-window.updateTimeSlots = async function updateTimeSlots(
+globalThis.updateTimeSlots = async function updateTimeSlots(
   dateStr,
   timeSlot,
   checked
@@ -594,14 +628,27 @@ function renderCompletedList(completed) {
   if (completed.length === 0) {
     // 予約完了日がない場合でも合計時間を表示
     const emptyDiv = document.createElement("div");
-    emptyDiv.className = "completed-item";
-    emptyDiv.textContent = "予約完了日はありません";
+    emptyDiv.className = "completed-item empty-state";
+    emptyDiv.innerHTML = `
+      <div style="text-align: center; padding: 20px; color: #888;">
+        <div style="font-size: 48px; margin-bottom: 10px;">📅</div>
+        <div>予約完了日はありません</div>
+      </div>
+    `;
     container.appendChild(emptyDiv);
   } else {
-    completed.forEach((item) => {
+    // 日付順にソート（新しい日付から）
+    const sortedCompleted = [...completed].sort((a, b) => {
+      const dateA = new Date(a.date || a);
+      const dateB = new Date(b.date || b);
+      return dateB - dateA; // 降順（新しい日付が上）
+    });
+
+    sortedCompleted.forEach((item) => {
       // 新しい形式（時間帯情報付き）と古い形式（日付のみ）の両方に対応
       const dateStr = item.date || item;
       const timeSlots = item.timeSlots || [];
+      const teacherUrl = item.teacherUrl || "";
 
       const date = new Date(dateStr);
       date.setHours(0, 0, 0, 0);
@@ -618,18 +665,61 @@ function renderCompletedList(completed) {
       // 日付が過ぎているかチェック
       const isPast = date < today;
 
-      // 時間帯を表示
-      let timeSlotText = "";
+      // 時間帯を明確に表示
+      let timeSlotDisplay = "";
       if (timeSlots.length > 0) {
-        timeSlotText = ` (${timeSlots.join(", ")})`;
+        // 時間帯をソートして表示
+        const sortedTimeSlots = [...timeSlots].sort();
+        timeSlotDisplay = `
+          <div class="reservation-time-slots">
+            <span class="time-label">⏰ 予約時間:</span>
+            <span class="time-values">${sortedTimeSlots.join(", ")}</span>
+          </div>
+        `;
+      } else {
+        timeSlotDisplay = `
+          <div class="reservation-time-slots">
+            <span class="time-label">⏰ 予約時間:</span>
+            <span class="time-values no-time">時間未設定</span>
+          </div>
+        `;
+      }
+
+      // 先生名を表示
+      let teacherDisplay = "";
+      if (teacherUrl) {
+        const teacherName = extractTeacherName(teacherUrl);
+        if (teacherName) {
+          teacherDisplay = `
+            <div class="reservation-teacher">
+              <span class="teacher-label">👤 先生:</span>
+              <span class="teacher-name">${teacherName}</span>
+            </div>
+          `;
+        }
       }
 
       // 日付が過ぎている場合は+40分を追加
       if (isPast) {
         totalMinutes += 40;
-        itemDiv.innerHTML = `✓ ${formattedDate}${timeSlotText} <span class="lesson-time">(+40分)</span>`;
+        itemDiv.innerHTML = `
+          <div class="reservation-date">
+            <span class="date-icon">✅</span>
+            <span class="date-text">${formattedDate}</span>
+            <span class="lesson-time past">(+40分)</span>
+          </div>
+          ${timeSlotDisplay}
+          ${teacherDisplay}
+        `;
       } else {
-        itemDiv.innerHTML = `✓ ${formattedDate}${timeSlotText}`;
+        itemDiv.innerHTML = `
+          <div class="reservation-date">
+            <span class="date-icon">✅</span>
+            <span class="date-text">${formattedDate}</span>
+          </div>
+          ${timeSlotDisplay}
+          ${teacherDisplay}
+        `;
       }
 
       container.appendChild(itemDiv);
@@ -650,7 +740,12 @@ function renderCompletedList(completed) {
 
   const totalDiv = document.createElement("div");
   totalDiv.className = "completed-item total-time";
-  totalDiv.innerHTML = `<strong>レッスン合計時間: ${totalTimeText}</strong>`;
+  totalDiv.innerHTML = `
+    <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
+      <span style="font-size: 24px;">📊</span>
+      <strong>レッスン合計時間: ${totalTimeText}</strong>
+    </div>
+  `;
   container.appendChild(totalDiv);
 }
 
@@ -672,10 +767,33 @@ function appendLog(message, level = "info") {
     second: "2-digit",
   });
 
+  // 絵文字アイコンを追加
+  let icon = "";
+  switch (level) {
+    case "error":
+      icon = "❌";
+      break;
+    case "warn":
+      icon = "⚠️";
+      break;
+    case "success":
+      icon = "✅";
+      break;
+    case "info":
+    default:
+      icon = "ℹ️";
+      break;
+  }
+
   const timestampSpan = document.createElement("span");
   timestampSpan.style.color = "#888";
   timestampSpan.textContent = `[${timestamp}] `;
   logLine.appendChild(timestampSpan);
+
+  const iconSpan = document.createElement("span");
+  iconSpan.textContent = `${icon} `;
+  iconSpan.style.marginRight = "4px";
+  logLine.appendChild(iconSpan);
 
   const messageSpan = document.createElement("span");
   messageSpan.textContent = message;
@@ -696,8 +814,32 @@ function appendLog(message, level = "info") {
 // ステータス更新
 function updateStatus(status) {
   const statusLabel = document.getElementById("status-label");
+  const statusIcon = document.getElementById("status-icon");
+
   if (statusLabel) {
     statusLabel.textContent = `状態: ${status}`;
+  }
+
+  if (statusIcon) {
+    switch (status) {
+      case "実行中":
+      case "監視中":
+        statusIcon.textContent = "▶";
+        statusIcon.style.color = "#4caf50";
+        break;
+      case "停止":
+      case "待機中":
+        statusIcon.textContent = "⏸";
+        statusIcon.style.color = "#9e9e9e";
+        break;
+      case "エラー":
+        statusIcon.textContent = "⚠";
+        statusIcon.style.color = "#f44336";
+        break;
+      default:
+        statusIcon.textContent = "⏸";
+        statusIcon.style.color = "#9e9e9e";
+    }
   }
 }
 
@@ -715,29 +857,130 @@ function updateMonitoringTimeStatus(status) {
   if (statusText) {
     if (status.monitoringTimeRestriction) {
       if (status.withinMonitoringHours) {
-        statusText.textContent = "✓ 現在は監視時間内です";
-        statusText.style.color = "#4caf50";
-        statusText.style.backgroundColor = "#e8f5e9";
+        statusText.textContent = "✓ 監視時間内";
+        statusText.className = "status-badge status-ok";
       } else {
         statusText.textContent = "⏸ 監視時間外";
-        statusText.style.color = "#f44336";
-        statusText.style.backgroundColor = "#ffebee";
+        statusText.className = "status-badge status-warning";
       }
     } else {
-      statusText.textContent = "✓ 監視時間制限は無効です（24時間監視）";
-      statusText.style.color = "#2196f3";
-      statusText.style.backgroundColor = "#e3f2fd";
+      statusText.textContent = "✓ 24時間監視";
+      statusText.className = "status-badge status-ok";
     }
   }
 }
 
+// URLから先生名を抽出
+function extractTeacherName(url) {
+  if (!url || !url.trim()) {
+    return "";
+  }
+  // URL形式: https://www.jicoo.com/t/_XDgWVCOgMPP/e/Teacher_Vanessa
+  // 最後の /e/ 以降を取得
+  const match = url.match(/\/e\/([^\/\?]+)/);
+  if (match && match[1]) {
+    // Teacher_Vanessa -> Teacher Vanessa に変換
+    return match[1].replace(/_/g, " ");
+  }
+  return "";
+}
+
 // 予約結果更新
-function updateReservationResult(dateStr, success) {
-  appendLog(
-    `予約結果: ${dateStr} - ${success ? "成功" : "失敗"}`,
-    success ? "success" : "error"
-  );
+function updateReservationResult(
+  dateStr,
+  success,
+  timeSlots = [],
+  teacherUrl = ""
+) {
+  if (success) {
+    // 日付をフォーマット
+    const date = new Date(dateStr);
+    const formattedDate = date.toLocaleDateString("ja-JP", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short",
+    });
+
+    // 時間帯の表示
+    let timeSlotText = "";
+    if (timeSlots && timeSlots.length > 0) {
+      timeSlotText = ` (${timeSlots.join(", ")})`;
+    }
+
+    // 先生名の表示
+    let teacherText = "";
+    if (teacherUrl) {
+      const teacherName = extractTeacherName(teacherUrl);
+      if (teacherName) {
+        teacherText = ` - ${teacherName}`;
+      }
+    }
+
+    appendLog(
+      `🎉 予約成功: ${formattedDate}${timeSlotText}${teacherText}`,
+      "success"
+    );
+
+    // 成功通知を表示（オプション）
+    showReservationNotification(dateStr, timeSlots, true, teacherUrl);
+  } else {
+    appendLog(`❌ 予約失敗: ${dateStr}`, "error");
+  }
+
+  // データを再読み込みして最新の状態を表示
   loadInitialData();
+}
+
+// 予約完了通知を表示
+function showReservationNotification(
+  dateStr,
+  timeSlots,
+  success,
+  teacherUrl = ""
+) {
+  const date = new Date(dateStr);
+  const formattedDate = date.toLocaleDateString("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  });
+
+  let timeSlotText = "";
+  if (timeSlots && timeSlots.length > 0) {
+    timeSlotText = `\n⏰ 予約時間: ${timeSlots.join(", ")}`;
+  }
+
+  // 先生名を取得
+  let teacherText = "";
+  if (teacherUrl) {
+    const teacherName = extractTeacherName(teacherUrl);
+    if (teacherName) {
+      teacherText = `\n👤 先生: ${teacherName}`;
+    }
+  }
+
+  // ブラウザの通知APIを使用（許可されている場合）
+  if ("Notification" in window && Notification.permission === "granted") {
+    new Notification("予約完了", {
+      body: `日付: ${formattedDate}${timeSlotText}${teacherText}`,
+      icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>",
+      tag: `reservation-${dateStr}`,
+    });
+  }
+
+  // ログエリアに強調表示
+  appendLog(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "success");
+  appendLog(`✅ 予約が完了しました！`, "success");
+  appendLog(`📅 予約日: ${formattedDate}`, "success");
+  if (timeSlots && timeSlots.length > 0) {
+    appendLog(`⏰ 予約時間: ${timeSlots.join(", ")}`, "success");
+  }
+  if (teacherText) {
+    appendLog(`👤 先生: ${extractTeacherName(teacherUrl)}`, "success");
+  }
+  appendLog(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "success");
 }
 
 // ポーリング（ステータス更新）
@@ -782,7 +1025,6 @@ function renderCalendar() {
 
   // 月の最初の日を取得
   const firstDay = new Date(year, month, 1);
-  const lastDay = new Date(year, month + 1, 0);
   const startDate = new Date(firstDay);
   startDate.setDate(startDate.getDate() - firstDay.getDay()); // 週の最初の日（日曜日）
 

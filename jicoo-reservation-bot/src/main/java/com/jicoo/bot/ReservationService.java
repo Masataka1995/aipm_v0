@@ -32,23 +32,26 @@ public class ReservationService {
     private static final Logger logger = LoggerFactory.getLogger(ReservationService.class);
     
     // 定数定義
-    private static final int DEFAULT_PAGE_LOAD_WAIT_MS = 2000;
-    private static final int DEFAULT_LOGIN_WAIT_MS = 3000;
-    private static final int DEFAULT_ELEMENT_WAIT_MS = 2000;
-    private static final int DEFAULT_REFRESH_WAIT_MS = 2000;
     private static final int DEFAULT_CLICK_WAIT_MS = 200;
-    private static final int DEFAULT_FORM_SUBMIT_WAIT_MS = 3000;
     private static final int MIN_MONITORING_INTERVAL_SECONDS = 1;
     
     // XPathセレクタの定数化
     private static final String MUI_BUTTON_XPATH = "//button[contains(@class, 'MuiButton')]";
     private static final String TIME_SLOT_BUTTON_XPATH = MUI_BUTTON_XPATH + " | //button[contains(text(), ':')]";
-    private static final String LOGIN_INPUT_XPATH = "//input[@type='text' or @type='email'] | //input[@type='password']";
     
     // WebDriverWaitのタイムアウト定数
     private static final Duration DEFAULT_WAIT_TIMEOUT = Duration.ofSeconds(5);
-    private static final Duration SHORT_WAIT_TIMEOUT = Duration.ofSeconds(3);
-    private static final Duration MINIMAL_WAIT_TIMEOUT = Duration.ofMillis(500);
+    
+    // 文字列リテラルの定数化
+    private static final String ATTR_DISABLED = "disabled";
+    private static final String ATTR_CLASS = "class";
+    private static final String ATTR_ARIA_DISABLED = "aria-disabled";
+    private static final String CLASS_MUI_DISABLED = "Mui-disabled";
+    private static final String DATE_PARAM_PREFIX = "date=";
+    private static final String BUTTON_TEXT_PREFIX = "//button[contains(text(), '";
+    private static final String STEP_SELECTOR_NOT_FOUND = "【STEP】handleLoginPopup - セレクタ {} で要素が見つかりませんでした";
+    private static final String ERROR_CAUSE_FORMAT = "原因: %s";
+    private static final String ERROR_MESSAGE_FORMAT = "エラーメッセージ: %s, エラークラス: %s%s";
     
     private final Config config;
     
@@ -156,13 +159,6 @@ public class ReservationService {
             logger.debug("URLに日付パラメータが含まれています。タイムスロットの表示を待機中...");
             waitForTimeSlotButtons(driver);
             
-            // 日付が正しく表示されているか確認（オプション）
-            // URLに日付パラメータがある場合、通常は日付選択は不要だが、
-            // 念のため確認する場合は以下のコメントを外す
-            // if (!selectDate(driver, targetDate)) {
-            //     logger.warn("日付確認に失敗しましたが、URLパラメータで指定されているため続行します: {}", targetDate);
-            // }
-            
             // 選択された時間帯を順番に監視（日付は既に選択済み）
             for (String timeSlot : timeSlots) {
                 // この日付の予約が既に成功している場合はスキップ
@@ -265,7 +261,7 @@ public class ReservationService {
             StringBuilder urlBuilder = new StringBuilder(url.length() + 20); // 予めサイズを確保
             urlBuilder.append(url);
             
-            int dateParamIndex = url.indexOf("date=");
+            int dateParamIndex = url.indexOf(DATE_PARAM_PREFIX);
             if (dateParamIndex != -1) {
                 // 既存のdateパラメータを置き換え
                 int startIndex = dateParamIndex;
@@ -273,12 +269,12 @@ public class ReservationService {
                 if (endIndex == -1) {
                     endIndex = url.length();
                 }
-                urlBuilder.replace(startIndex, endIndex, "date=" + dateStr);
+                urlBuilder.replace(startIndex, endIndex, DATE_PARAM_PREFIX + dateStr);
                 logger.debug("既存のdateパラメータを置き換えました");
             } else {
                 // dateパラメータがない場合は追加
                 char separator = url.contains("?") ? '&' : '?';
-                urlBuilder.append(separator).append("date=").append(dateStr);
+                urlBuilder.append(separator).append(DATE_PARAM_PREFIX).append(dateStr);
                 logger.debug("dateパラメータを追加しました");
             }
             url = urlBuilder.toString();
@@ -325,7 +321,7 @@ public class ReservationService {
         logger.info("【STEP】handleLoginPopup - 現在のURL: {}", driver.getCurrentUrl());
         
         try {
-            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(5));
+            WebDriverWait wait = createWebDriverWait(driver);
             
             // 複数のセレクタパターンを試行
             String[] usernameSelectors = {
@@ -368,7 +364,7 @@ public class ReservationService {
                         break;
                     }
                 } catch (TimeoutException | NoSuchElementException e) {
-                    logger.debug("【STEP】handleLoginPopup - セレクタ {} で要素が見つかりませんでした", selector);
+                    logger.debug(STEP_SELECTOR_NOT_FOUND, selector);
                     continue;
                 }
             }
@@ -386,7 +382,7 @@ public class ReservationService {
                             break;
                         }
                     } catch (TimeoutException | NoSuchElementException e) {
-                        logger.debug("【STEP】handleLoginPopup - セレクタ {} で要素が見つかりませんでした", selector);
+                        logger.debug(STEP_SELECTOR_NOT_FOUND, selector);
                         continue;
                     }
                 }
@@ -403,7 +399,7 @@ public class ReservationService {
                             String text = selector.substring(selector.indexOf("'") + 1, selector.lastIndexOf("'"));
                             submitButton = wait.until(
                                 ExpectedConditions.elementToBeClickable(
-                                    By.xpath("//button[contains(text(), '" + text + "')]")));
+                                    By.xpath(BUTTON_TEXT_PREFIX + text + "')]")));
                         } else {
                             submitButton = wait.until(
                                 ExpectedConditions.elementToBeClickable(By.cssSelector(selector)));
@@ -413,7 +409,7 @@ public class ReservationService {
                             break;
                         }
                     } catch (TimeoutException | NoSuchElementException e) {
-                        logger.debug("【STEP】handleLoginPopup - セレクタ {} で要素が見つかりませんでした", selector);
+                        logger.debug(STEP_SELECTOR_NOT_FOUND, selector);
                         continue;
                     }
                 }
@@ -437,7 +433,7 @@ public class ReservationService {
                     
                     // ログイン成功を待機（カレンダー画面が表示されるまで）
                     try {
-                        WebDriverWait loginWait = new WebDriverWait(driver, Duration.ofSeconds(5));
+                        WebDriverWait loginWait = createWebDriverWait(driver);
                         // ログインポップアップが消えるまで待機
                         loginWait.until(ExpectedConditions.invisibilityOfElementLocated(
                             By.xpath("//input[@type='text' or @type='email'] | //input[@type='password']")
@@ -450,8 +446,7 @@ public class ReservationService {
                     return true;
                 } catch (Exception e) {
                     logger.error("【ERROR】handleLoginPopup - ログイン入力中にエラーが発生しました", e);
-                    logger.error("【ERROR】handleLoginPopup - エラーメッセージ: {}", e.getMessage());
-                    logger.error("【ERROR】handleLoginPopup - 現在のURL: {}", driver.getCurrentUrl());
+                    logErrorWithUrl("handleLoginPopup", driver, "エラーメッセージ: " + e.getMessage());
                     return false;
                 }
             } else {
@@ -475,9 +470,7 @@ public class ReservationService {
         } catch (Exception e) {
             logger.error("【ERROR】handleLoginPopup - ログインポップアップ処理中に予期しないエラーが発生しました", e);
             logger.error("【ERROR】handleLoginPopup - エラーメッセージ: {}", e.getMessage());
-            logger.error("【ERROR】handleLoginPopup - エラークラス: {}", e.getClass().getName());
-            logger.error("【ERROR】handleLoginPopup - 現在のURL: {}", driver.getCurrentUrl());
-            logger.error("【ERROR】handleLoginPopup - ページタイトル: {}", driver.getTitle());
+            logErrorWithUrlAndTitle("handleLoginPopup", driver, "エラークラス: " + e.getClass().getName());
             if (e.getCause() != null) {
                 logger.error("【ERROR】handleLoginPopup - 原因: {}", e.getCause().getMessage());
             }
@@ -504,7 +497,7 @@ public class ReservationService {
                 String.valueOf(targetDate.getDayOfMonth())
             };
             
-            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(config.getTimeoutSeconds()));
+            WebDriverWait wait = createWebDriverWait(driver, config.getTimeoutSeconds());
             
             // カレンダー要素を探す（複数のセレクタを試行）
             WebElement dateElement = null;
@@ -542,9 +535,8 @@ public class ReservationService {
             }
             
             if (dateElement == null) {
-                logger.error("【ERROR】selectDate - 日付要素が見つかりませんでした: {}", targetDate);
-                logger.error("【ERROR】selectDate - 試行した日付フォーマット数: {}", dateFormats.length);
-                logger.error("【ERROR】selectDate - 現在のURL: {}", driver.getCurrentUrl());
+                logErrorWithUrlAndTitle("selectDate", driver, 
+                    String.format("日付要素が見つかりませんでした: %s, 試行した日付フォーマット数: %d", targetDate, dateFormats.length));
                 return false;
             }
             
@@ -556,7 +548,7 @@ public class ReservationService {
                     "arguments[0].scrollIntoView(true);", dateElement);
                 // 短い待機（要素が表示されるまで）
                 try {
-                    WebDriverWait dateWait = new WebDriverWait(driver, Duration.ofMillis(500));
+                    WebDriverWait dateWait = createWebDriverWait(driver, Duration.ofMillis(500));
                     dateWait.until(ExpectedConditions.elementToBeClickable(dateElement));
                 } catch (TimeoutException e) {
                     logger.debug("日付要素のクリック可能状態の待機タイムアウト（続行します）");
@@ -574,7 +566,7 @@ public class ReservationService {
             // タイムスロット一覧が表示されるまで待機
             logger.debug("タイムスロット一覧の表示を待機中...");
             try {
-                WebDriverWait timeSlotWait = new WebDriverWait(driver, Duration.ofSeconds(5));
+                WebDriverWait timeSlotWait = createWebDriverWait(driver);
                 timeSlotWait.until(ExpectedConditions.presenceOfElementLocated(
                     By.xpath(TIME_SLOT_BUTTON_XPATH)
                 ));
@@ -586,12 +578,10 @@ public class ReservationService {
             
         } catch (Exception e) {
             logger.error("【ERROR】selectDate - 日付選択中にエラーが発生しました: {}", targetDate, e);
-            logger.error("【ERROR】selectDate - エラーメッセージ: {}", e.getMessage());
-            logger.error("【ERROR】selectDate - エラークラス: {}", e.getClass().getName());
-            logger.error("【ERROR】selectDate - 現在のURL: {}", driver.getCurrentUrl());
-            if (e.getCause() != null) {
-                logger.error("【ERROR】selectDate - 原因: {}", e.getCause().getMessage());
-            }
+            String causeMsg = e.getCause() != null ? String.format(ERROR_CAUSE_FORMAT, e.getCause().getMessage()) : null;
+            logErrorWithUrlAndTitle("selectDate", driver, 
+                String.format(ERROR_MESSAGE_FORMAT, e.getMessage(), e.getClass().getName(), 
+                    causeMsg != null ? ", " + causeMsg : ""));
             return false;
         }
     }
@@ -656,20 +646,20 @@ public class ReservationService {
                                     
                                     // ボタンが有効か確認（非表示でも有効な場合がある）
                                     boolean isEnabled = buttonElement.isEnabled();
-                                    String disabled = buttonElement.getAttribute("disabled");
+                                    String disabled = buttonElement.getAttribute(ATTR_DISABLED);
                                     String style = buttonElement.getAttribute("style");
-                                    String className = buttonElement.getAttribute("class");
+                                    String className = buttonElement.getAttribute(ATTR_CLASS);
                                     
                                     // MUIボタンの場合、disabledクラスやaria-disabled属性も確認
                                     boolean isMuiDisabled = className != null && 
-                                                          (className.contains("Mui-disabled") || 
-                                                           className.contains("disabled"));
-                                    String ariaDisabled = buttonElement.getAttribute("aria-disabled");
+                                                          (className.contains(CLASS_MUI_DISABLED) || 
+                                                           className.contains(ATTR_DISABLED));
+                                    String ariaDisabled = buttonElement.getAttribute(ATTR_ARIA_DISABLED);
                                     
                                     // 非表示でも予約可能な場合があるため、disabled属性とクラス名で判断
                                     boolean isAvailable = isEnabled && 
                                                          !"true".equals(disabled) &&
-                                                         !"disabled".equals(disabled) &&
+                                                         !ATTR_DISABLED.equals(disabled) &&
                                                          !isMuiDisabled &&
                                                          !"true".equals(ariaDisabled) &&
                                                          (style == null || !style.contains("display: none")) &&
@@ -715,12 +705,10 @@ public class ReservationService {
             
         } catch (Exception e) {
             logger.error("【ERROR】getAvailableTimeSlots - タイムスロット取得中にエラーが発生しました", e);
-            logger.error("【ERROR】getAvailableTimeSlots - エラーメッセージ: {}", e.getMessage());
-            logger.error("【ERROR】getAvailableTimeSlots - エラークラス: {}", e.getClass().getName());
-            logger.error("【ERROR】getAvailableTimeSlots - 現在のURL: {}", driver.getCurrentUrl());
-            if (e.getCause() != null) {
-                logger.error("【ERROR】getAvailableTimeSlots - 原因: {}", e.getCause().getMessage());
-            }
+            String causeMsg = e.getCause() != null ? String.format(ERROR_CAUSE_FORMAT, e.getCause().getMessage()) : null;
+            logErrorWithUrlAndTitle("getAvailableTimeSlots", driver, 
+                String.format(ERROR_MESSAGE_FORMAT, e.getMessage(), e.getClass().getName(), 
+                    causeMsg != null ? ", " + causeMsg : ""));
         }
         
         return availableSlots;
@@ -820,7 +808,7 @@ public class ReservationService {
                             driver.get(urlWithDate);
                             // ページ読み込み待機（WebDriverWaitで最適化）
                             try {
-                                WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(5));
+                                WebDriverWait wait = createWebDriverWait(driver);
                                 wait.until(ExpectedConditions.presenceOfElementLocated(By.tagName("body")));
                             } catch (TimeoutException e) {
                                 logger.debug("ページ読み込みタイムアウト（続行します）");
@@ -830,7 +818,7 @@ public class ReservationService {
                             driver.navigate().refresh();
                             logger.debug("ページを更新しました（日付パラメータは既に含まれています）");
                             try {
-                                WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(3));
+                                WebDriverWait wait = createWebDriverWait(driver, 3);
                                 wait.until(ExpectedConditions.presenceOfElementLocated(By.tagName("body")));
                             } catch (TimeoutException e) {
                                 logger.debug("ページリフレッシュ後の読み込みタイムアウト（続行します）");
@@ -838,7 +826,7 @@ public class ReservationService {
                         }
                         // タイムスロット表示待機（WebDriverWaitで最適化）
                         try {
-                            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(5));
+                            WebDriverWait wait = createWebDriverWait(driver);
                             wait.until(ExpectedConditions.presenceOfElementLocated(
                                 By.xpath(TIME_SLOT_BUTTON_XPATH)
                             ));
@@ -850,7 +838,7 @@ public class ReservationService {
                         logger.warn("targetDateがnullのため、日付パラメータを追加できません");
                         driver.navigate().refresh();
                         try {
-                            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(3));
+                            WebDriverWait wait = createWebDriverWait(driver, 3);
                             wait.until(ExpectedConditions.presenceOfElementLocated(By.tagName("body")));
                         } catch (TimeoutException e) {
                             logger.debug("ページリフレッシュ後の読み込みタイムアウト（続行します）");
@@ -868,7 +856,6 @@ public class ReservationService {
                     };
                     
                     WebElement timeSlotButton = null;
-                    boolean currentIsDisabled = true; // 現在のボタン状態
                     
                     // 各時間形式バリエーションを試行
                     for (String timeVar : timeVariations) {
@@ -916,23 +903,20 @@ public class ReservationService {
                                         
                                         // ボタンが有効か確認（より柔軟な判定）
                                         boolean isClickable = targetElement.isEnabled() && 
-                                                             !"true".equals(targetElement.getAttribute("disabled")) &&
-                                                             !"disabled".equals(targetElement.getAttribute("disabled")) &&
+                                                             !"true".equals(targetElement.getAttribute(ATTR_DISABLED)) &&
+                                                             !ATTR_DISABLED.equals(targetElement.getAttribute(ATTR_DISABLED)) &&
                                                              targetElement.isDisplayed();
                                         
                                         // MUIボタンの場合、disabledクラスやaria-disabled属性も確認
-                                        String className = targetElement.getAttribute("class");
+                                        String className = targetElement.getAttribute(ATTR_CLASS);
                                         boolean isMuiDisabled = className != null && 
-                                                              (className.contains("Mui-disabled") || 
-                                                               className.contains("disabled"));
-                                        String ariaDisabled = targetElement.getAttribute("aria-disabled");
+                                                              (className.contains(CLASS_MUI_DISABLED) || 
+                                                               className.contains(ATTR_DISABLED));
+                                        String ariaDisabled = targetElement.getAttribute(ATTR_ARIA_DISABLED);
                                         
                                         if (isMuiDisabled || "true".equals(ariaDisabled)) {
                                             isClickable = false;
                                         }
-                                        
-                                        // 現在の状態を記録
-                                        currentIsDisabled = !isClickable;
                                         
                                         if (isClickable) {
                                             timeSlotButton = targetElement; // button要素を使用
@@ -960,15 +944,15 @@ public class ReservationService {
                     // ボタンの状態変化を検知（無効→有効）
                     if (timeSlotButton != null) {
                         // MUIボタンの場合、disabledクラスやaria-disabled属性も確認
-                        String className = timeSlotButton.getAttribute("class");
+                        String className = timeSlotButton.getAttribute(ATTR_CLASS);
                         boolean isMuiDisabled = className != null && 
-                                              (className.contains("Mui-disabled") || 
-                                               className.contains("disabled"));
-                        String ariaDisabled = timeSlotButton.getAttribute("aria-disabled");
+                                              (className.contains(CLASS_MUI_DISABLED) || 
+                                               className.contains(ATTR_DISABLED));
+                        String ariaDisabled = timeSlotButton.getAttribute(ATTR_ARIA_DISABLED);
                         
                         boolean isCurrentlyEnabled = timeSlotButton.isEnabled() && 
-                                                    !"true".equals(timeSlotButton.getAttribute("disabled")) &&
-                                                    !"disabled".equals(timeSlotButton.getAttribute("disabled")) &&
+                                                    !"true".equals(timeSlotButton.getAttribute(ATTR_DISABLED)) &&
+                                                    !ATTR_DISABLED.equals(timeSlotButton.getAttribute(ATTR_DISABLED)) &&
                                                     !isMuiDisabled &&
                                                     !"true".equals(ariaDisabled) &&
                                                     timeSlotButton.isDisplayed();
@@ -989,15 +973,15 @@ public class ReservationService {
                     // ボタンが押せる状態か再確認
                     try {
                         // MUIボタンの場合、disabledクラスやaria-disabled属性も確認
-                        String className = timeSlotButton.getAttribute("class");
+                        String className = timeSlotButton.getAttribute(ATTR_CLASS);
                         boolean isMuiDisabled = className != null && 
-                                              (className.contains("Mui-disabled") || 
-                                               className.contains("disabled"));
-                        String ariaDisabled = timeSlotButton.getAttribute("aria-disabled");
+                                              (className.contains(CLASS_MUI_DISABLED) || 
+                                               className.contains(ATTR_DISABLED));
+                        String ariaDisabled = timeSlotButton.getAttribute(ATTR_ARIA_DISABLED);
                         
                         boolean isEnabled = timeSlotButton.isEnabled() && 
-                                          !"true".equals(timeSlotButton.getAttribute("disabled")) &&
-                                          !"disabled".equals(timeSlotButton.getAttribute("disabled")) &&
+                                          !"true".equals(timeSlotButton.getAttribute(ATTR_DISABLED)) &&
+                                          !ATTR_DISABLED.equals(timeSlotButton.getAttribute(ATTR_DISABLED)) &&
                                           !isMuiDisabled &&
                                           !"true".equals(ariaDisabled) &&
                                           timeSlotButton.isDisplayed();
@@ -1018,7 +1002,7 @@ public class ReservationService {
                                 "arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});", timeSlotButton);
                             // 短い待機（要素が表示されるまで）
                             try {
-                                WebDriverWait wait = new WebDriverWait(driver, Duration.ofMillis(DEFAULT_CLICK_WAIT_MS * 10));
+                                WebDriverWait wait = createWebDriverWait(driver, Duration.ofMillis(DEFAULT_CLICK_WAIT_MS * 10L));
                                 wait.until(ExpectedConditions.elementToBeClickable(timeSlotButton));
                             } catch (TimeoutException e) {
                                 logger.debug("要素のクリック可能状態の待機タイムアウト（続行します）");
@@ -1053,12 +1037,10 @@ public class ReservationService {
                 } catch (Exception e) {
                     logger.error("【ERROR】monitorTimeSlot - タイムスロット監視中にエラーが発生しました", e);
                     logger.error("【ERROR】monitorTimeSlot - タイムスロット: {}, 対象日付: {}", timeSlot, targetDate);
-                    logger.error("【ERROR】monitorTimeSlot - エラーメッセージ: {}", e.getMessage());
-                    logger.error("【ERROR】monitorTimeSlot - エラークラス: {}", e.getClass().getName());
-                    logger.error("【ERROR】monitorTimeSlot - 現在のURL: {}", driver.getCurrentUrl());
-                    if (e.getCause() != null) {
-                        logger.error("【ERROR】monitorTimeSlot - 原因: {}", e.getCause().getMessage());
-                    }
+                    String causeMsg = e.getCause() != null ? String.format(ERROR_CAUSE_FORMAT, e.getCause().getMessage()) : null;
+                    logErrorWithUrlAndTitle("monitorTimeSlot", driver, 
+                        String.format(ERROR_MESSAGE_FORMAT, e.getMessage(), e.getClass().getName(), 
+                            causeMsg != null ? ", " + causeMsg : ""));
                 }
                }, 0, monitoringInterval, TimeUnit.SECONDS);
             
@@ -1069,7 +1051,7 @@ public class ReservationService {
                 logger.info("タイムスロットのクリックが成功しました: {}", timeSlot);
                 // ページ遷移を待機（WebDriverWaitで最適化）
                 try {
-                    WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(5));
+                    WebDriverWait wait = createWebDriverWait(driver);
                     wait.until(ExpectedConditions.presenceOfElementLocated(By.tagName("body")));
                 } catch (TimeoutException e) {
                     logger.debug("ページ遷移後の読み込みタイムアウト（続行します）");
@@ -1112,7 +1094,7 @@ public class ReservationService {
         logger.info("予約フォームに入力します: name={}, email={}", name, email);
         
         try {
-            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(config.getTimeoutSeconds()));
+            WebDriverWait wait = createWebDriverWait(driver, config.getTimeoutSeconds());
             
             // 名前フィールドを探す（複数のセレクタを試行）
             String[] nameSelectors = {
@@ -1135,10 +1117,8 @@ public class ReservationService {
             }
             
             if (nameField == null) {
-                logger.error("【ERROR】fillReservationForm - 名前フィールドが見つかりませんでした");
-                logger.error("【ERROR】fillReservationForm - 試行したセレクタ数: {}", nameSelectors.length);
-                logger.error("【ERROR】fillReservationForm - 現在のURL: {}", driver.getCurrentUrl());
-                logger.error("【ERROR】fillReservationForm - ページタイトル: {}", driver.getTitle());
+                logErrorWithUrlAndTitle("fillReservationForm", driver, 
+                    String.format("名前フィールドが見つかりませんでした, 試行したセレクタ数: %d", nameSelectors.length));
                 return false;
             }
             
@@ -1169,8 +1149,7 @@ public class ReservationService {
             if (emailField == null) {
                 logger.error("【ERROR】fillReservationForm - メールフィールドが見つかりませんでした");
                 logger.error("【ERROR】fillReservationForm - 試行したセレクタ数: {}", emailSelectors.length);
-                logger.error("【ERROR】fillReservationForm - 現在のURL: {}", driver.getCurrentUrl());
-                logger.error("【ERROR】fillReservationForm - ページタイトル: {}", driver.getTitle());
+                logErrorWithUrlAndTitle("fillReservationForm", driver, null);
                 return false;
             }
             
@@ -1180,7 +1159,7 @@ public class ReservationService {
             
             // フォーム入力完了を待機（短い待機）
             try {
-                WebDriverWait formWait = new WebDriverWait(driver, Duration.ofSeconds(2));
+                WebDriverWait formWait = createWebDriverWait(driver, 2);
                 formWait.until(ExpectedConditions.attributeToBeNotEmpty(emailField, "value"));
             } catch (TimeoutException e) {
                 logger.debug("メールアドレス入力の確認タイムアウト（続行します）");
@@ -1193,10 +1172,10 @@ public class ReservationService {
             logger.error("【ERROR】fillReservationForm - 名前: {}, メール: {}", name, email);
             logger.error("【ERROR】fillReservationForm - エラーメッセージ: {}", e.getMessage());
             logger.error("【ERROR】fillReservationForm - エラークラス: {}", e.getClass().getName());
-            logger.error("【ERROR】fillReservationForm - 現在のURL: {}", driver.getCurrentUrl());
-            if (e.getCause() != null) {
-                logger.error("【ERROR】fillReservationForm - 原因: {}", e.getCause().getMessage());
-            }
+            String causeMsg = e.getCause() != null ? String.format(ERROR_CAUSE_FORMAT, e.getCause().getMessage()) : null;
+            logErrorWithUrl("fillReservationForm", driver, 
+                String.format(ERROR_MESSAGE_FORMAT, e.getMessage(), e.getClass().getName(), 
+                    causeMsg != null ? ", " + causeMsg : ""));
             return false;
         }
     }
@@ -1210,7 +1189,7 @@ public class ReservationService {
         logger.info("予約を確定します");
         
         try {
-            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(config.getTimeoutSeconds()));
+            WebDriverWait wait = createWebDriverWait(driver, config.getTimeoutSeconds());
             
             // 確定ボタンを探す（複数のセレクタを試行）
             String[] submitSelectors = {
@@ -1235,8 +1214,7 @@ public class ReservationService {
             if (submitButton == null) {
                 logger.error("【ERROR】submitReservation - 確定ボタンが見つかりませんでした");
                 logger.error("【ERROR】submitReservation - 試行したセレクタ数: {}", submitSelectors.length);
-                logger.error("【ERROR】submitReservation - 現在のURL: {}", driver.getCurrentUrl());
-                logger.error("【ERROR】submitReservation - ページタイトル: {}", driver.getTitle());
+                logErrorWithUrlAndTitle("submitReservation", driver, null);
                 return false;
             }
             
@@ -1245,7 +1223,7 @@ public class ReservationService {
             
             // 成功画面への遷移を待機（WebDriverWaitで最適化）
             try {
-                WebDriverWait submitWait = new WebDriverWait(driver, Duration.ofSeconds(5));
+                WebDriverWait submitWait = createWebDriverWait(driver);
                 // ページが更新されるまで待機（URLまたはタイトルの変更を検知）
                 submitWait.until(ExpectedConditions.or(
                     ExpectedConditions.urlContains("success"),
@@ -1268,11 +1246,10 @@ public class ReservationService {
             logger.error("【ERROR】submitReservation - 予約確定中にエラーが発生しました", e);
             logger.error("【ERROR】submitReservation - エラーメッセージ: {}", e.getMessage());
             logger.error("【ERROR】submitReservation - エラークラス: {}", e.getClass().getName());
-            logger.error("【ERROR】submitReservation - 現在のURL: {}", driver.getCurrentUrl());
-            logger.error("【ERROR】submitReservation - ページタイトル: {}", driver.getTitle());
-            if (e.getCause() != null) {
-                logger.error("【ERROR】submitReservation - 原因: {}", e.getCause().getMessage());
-            }
+            String causeMsg = e.getCause() != null ? String.format(ERROR_CAUSE_FORMAT, e.getCause().getMessage()) : null;
+            logErrorWithUrlAndTitle("submitReservation", driver, 
+                String.format(ERROR_MESSAGE_FORMAT, e.getMessage(), e.getClass().getName(), 
+                    causeMsg != null ? ", " + causeMsg : ""));
             return false;
         }
     }
@@ -1322,11 +1299,32 @@ public class ReservationService {
     }
     
     /**
+     * WebDriverWaitインスタンスを作成（共通メソッド）
+     */
+    private WebDriverWait createWebDriverWait(WebDriver driver) {
+        return createWebDriverWait(driver, DEFAULT_WAIT_TIMEOUT);
+    }
+    
+    /**
+     * WebDriverWaitインスタンスを作成（タイムアウト指定版）
+     */
+    private WebDriverWait createWebDriverWait(WebDriver driver, Duration timeout) {
+        return new WebDriverWait(driver, timeout);
+    }
+    
+    /**
+     * WebDriverWaitインスタンスを作成（秒数指定版）
+     */
+    private WebDriverWait createWebDriverWait(WebDriver driver, int timeoutSeconds) {
+        return new WebDriverWait(driver, Duration.ofSeconds(timeoutSeconds));
+    }
+    
+    /**
      * ページ読み込みを待機（タイムアウト指定版）
      */
     private void waitForPageLoad(WebDriver driver, Duration timeout) {
         try {
-            WebDriverWait wait = new WebDriverWait(driver, timeout);
+            WebDriverWait wait = createWebDriverWait(driver, timeout);
             wait.until(ExpectedConditions.presenceOfElementLocated(By.tagName("body")));
         } catch (TimeoutException e) {
             logger.debug("ページ読み込みタイムアウト（続行します）");
@@ -1338,7 +1336,7 @@ public class ReservationService {
      */
     private void waitForTimeSlotButtons(WebDriver driver) {
         try {
-            WebDriverWait wait = new WebDriverWait(driver, DEFAULT_WAIT_TIMEOUT);
+            WebDriverWait wait = createWebDriverWait(driver);
             wait.until(ExpectedConditions.presenceOfElementLocated(By.xpath(TIME_SLOT_BUTTON_XPATH)));
         } catch (TimeoutException e) {
             logger.debug("タイムスロットボタンの表示待機タイムアウト（続行します）");
@@ -1346,21 +1344,37 @@ public class ReservationService {
     }
     
     /**
-     * 要素がクリック可能になるまで待機（共通メソッド）
+     * エラーログを出力（現在のURLとページタイトルを含む）
+     * @param methodName メソッド名
+     * @param driver WebDriver
+     * @param message エラーメッセージ（オプション）
      */
-    private void waitForElementClickable(WebDriver driver, WebElement element) {
-        waitForElementClickable(driver, element, DEFAULT_WAIT_TIMEOUT);
+    private void logErrorWithUrlAndTitle(String methodName, WebDriver driver, String message) {
+        if (message != null && !message.isEmpty()) {
+            logger.error("【ERROR】{} - {}", methodName, message);
+        }
+        try {
+            logger.error("【ERROR】{} - 現在のURL: {}", methodName, driver.getCurrentUrl());
+            logger.error("【ERROR】{} - ページタイトル: {}", methodName, driver.getTitle());
+        } catch (Exception e) {
+            logger.error("【ERROR】{} - URL/タイトル取得中にエラー: {}", methodName, e.getMessage());
+        }
     }
     
     /**
-     * 要素がクリック可能になるまで待機（タイムアウト指定版）
+     * エラーログを出力（現在のURLのみ）
+     * @param methodName メソッド名
+     * @param driver WebDriver
+     * @param message エラーメッセージ（オプション）
      */
-    private void waitForElementClickable(WebDriver driver, WebElement element, Duration timeout) {
+    private void logErrorWithUrl(String methodName, WebDriver driver, String message) {
+        if (message != null && !message.isEmpty()) {
+            logger.error("【ERROR】{} - {}", methodName, message);
+        }
         try {
-            WebDriverWait wait = new WebDriverWait(driver, timeout);
-            wait.until(ExpectedConditions.elementToBeClickable(element));
-        } catch (TimeoutException e) {
-            logger.debug("要素のクリック可能状態の待機タイムアウト（続行します）");
+            logger.error("【ERROR】{} - 現在のURL: {}", methodName, driver.getCurrentUrl());
+        } catch (Exception e) {
+            logger.error("【ERROR】{} - URL取得中にエラー: {}", methodName, e.getMessage());
         }
     }
 }

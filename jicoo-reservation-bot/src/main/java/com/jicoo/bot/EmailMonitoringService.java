@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory;
 
 import jakarta.mail.*;
 import jakarta.mail.internet.InternetAddress;
-import jakarta.mail.internet.MimeMessage;
 import jakarta.mail.search.ComparisonTerm;
 import jakarta.mail.search.ReceivedDateTerm;
 import java.time.LocalDate;

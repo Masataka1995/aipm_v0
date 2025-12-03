@@ -9,7 +9,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -98,13 +100,37 @@ public class WebSocketHandler implements WebSocketListener {
     }
     
     /**
-     * 予約結果をブロードキャスト
+     * 予約結果をブロードキャスト（時間帯情報なし）
      */
     public static void broadcastReservationResult(LocalDate date, boolean success) {
-        Map<String, Object> result = new HashMap<>(4); // 初期サイズを指定
+        broadcastReservationResult(date, success, null);
+    }
+    
+    /**
+     * 予約結果をブロードキャスト（時間帯情報付き）
+     */
+    public static void broadcastReservationResult(LocalDate date, boolean success, List<String> timeSlots) {
+        broadcastReservationResult(date, success, timeSlots, null);
+    }
+    
+    /**
+     * 予約結果をブロードキャスト（時間帯と先生URL情報付き）
+     */
+    public static void broadcastReservationResult(LocalDate date, boolean success, List<String> timeSlots, String teacherUrl) {
+        Map<String, Object> result = new HashMap<>(6); // 初期サイズを指定
         result.put("type", TYPE_RESERVATION_RESULT);
         result.put("date", date.toString());
         result.put("success", success);
+        if (timeSlots != null && !timeSlots.isEmpty()) {
+            result.put("timeSlots", new ArrayList<>(timeSlots));
+        } else {
+            result.put("timeSlots", new ArrayList<>());
+        }
+        if (teacherUrl != null && !teacherUrl.isEmpty()) {
+            result.put("teacherUrl", teacherUrl);
+        } else {
+            result.put("teacherUrl", "");
+        }
         broadcast(gson.toJson(result));
     }
     

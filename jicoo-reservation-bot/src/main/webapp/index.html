@@ -9,24 +9,41 @@
   <body>
     <div class="container">
       <header class="header">
-        <h1>Jicoo 自動予約 BOT</h1>
-        <div class="status-bar">
-          <span id="status-label">状態: 待機中</span>
-          <span class="separator">|</span>
-          <span>監視時間制限:</span>
-          <button id="monitoring-time-toggle" class="toggle-btn toggle-on">
-            ON
-          </button>
-          <span id="monitoring-time-status" class="status-text"
-            >監視時間内</span
-          >
+        <div class="header-content">
+          <h1>
+            <span class="icon">🤖</span>
+            Jicoo 自動予約 BOT
+          </h1>
+          <div class="status-bar">
+            <div class="status-item">
+              <span class="status-icon" id="status-icon">⏸</span>
+              <span id="status-label">状態: 待機中</span>
+            </div>
+            <span class="separator">|</span>
+            <div class="status-item">
+              <span>監視時間制限:</span>
+              <button
+                id="monitoring-time-toggle"
+                class="toggle-btn toggle-on"
+                aria-label="監視時間制限の切り替え"
+              >
+                ON
+              </button>
+            </div>
+            <span id="monitoring-time-status" class="status-badge status-ok"
+              >監視時間内</span
+            >
+          </div>
         </div>
       </header>
 
       <main class="main-content">
         <!-- 日付管理セクション -->
         <section class="date-management">
-          <h2>予約対象日付管理</h2>
+          <h2>
+            <span class="icon">📅</span>
+            予約対象日付管理
+          </h2>
 
           <!-- 日付追加パネル -->
           <div class="add-date-panel">
@@ -53,24 +70,44 @@
 
         <!-- ログセクション -->
         <section class="log-section">
-          <h2>ログ出力</h2>
+          <div class="log-header">
+            <h2>
+              <span class="icon">📋</span>
+              ログ出力
+            </h2>
+            <button
+              id="clear-log-btn"
+              class="btn btn-small btn-info"
+              title="ログをクリア"
+            >
+              クリア
+            </button>
+          </div>
           <div id="log-area" class="log-area"></div>
         </section>
 
         <!-- 操作パネル -->
         <section class="control-panel">
-          <h2>操作パネル</h2>
+          <h2>
+            <span class="icon">⚙️</span>
+            操作パネル
+          </h2>
           <div class="button-group">
             <button id="start-btn" class="btn btn-success btn-large">
+              <span class="btn-icon">▶</span>
               監視開始
             </button>
             <button id="stop-btn" class="btn btn-danger btn-large" disabled>
+              <span class="btn-icon">⏹</span>
               監視停止
             </button>
           </div>
 
           <div class="completed-reservations">
-            <h3>予約完了日</h3>
+            <h3>
+              <span class="icon">✅</span>
+              予約完了日
+            </h3>
             <div id="completed-list" class="completed-list"></div>
           </div>
         </section>

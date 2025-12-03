@@ -14,17 +14,26 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * REST APIサーブレット
  */
 public class ApiServlet extends HttpServlet {
     private static final Logger logger = LoggerFactory.getLogger(ApiServlet.class);
+    
+    // 定数定義
+    private static final String CONTENT_TYPE_JSON = "application/json; charset=UTF-8";
+    private static final String CHARSET_UTF8 = "UTF-8";
+    private static final String ERROR_KEY = "error";
+    private static final String SUCCESS_KEY = "success";
+    private static final String MESSAGE_KEY = "message";
+    private static final String ENABLED_KEY = "enabled";
+    private static final String API_ERROR_MSG = "APIリクエスト処理中にエラーが発生しました";
+    private static final String DATES_PATH_PREFIX = "/dates/";
+    private static final String UNKNOWN_ENDPOINT_MSG = "Unknown endpoint: ";
     
     private final Gson gson;
     private final DateManager dateManager;
@@ -40,99 +49,92 @@ public class ApiServlet extends HttpServlet {
     
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        String path = req.getPathInfo();
-        if (path == null) {
-            path = "/";
-        }
-        
-        resp.setContentType("application/json; charset=UTF-8");
-        resp.setCharacterEncoding("UTF-8");
-        
-        try {
-            String response = handleGetRequest(path, req);
-            resp.setStatus(HttpServletResponse.SC_OK);
-            resp.getWriter().write(response);
-        } catch (Exception e) {
-            logger.error("APIリクエスト処理中にエラーが発生しました", e);
-            resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            Map<String, String> error = new HashMap<>();
-            error.put("error", e.getMessage());
-            resp.getWriter().write(gson.toJson(error));
-        }
+        handleRequest(req, resp, () -> {
+            String path = getPath(req);
+            return handleGetRequest(path);
+        });
     }
     
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        String path = req.getPathInfo();
-        if (path == null) {
-            path = "/";
-        }
-        
-        resp.setContentType("application/json; charset=UTF-8");
-        resp.setCharacterEncoding("UTF-8");
-        
-        try {
+        handleRequest(req, resp, () -> {
+            String path = getPath(req);
             String body = readRequestBody(req);
-            String response = handlePostRequest(path, body, req);
-            resp.setStatus(HttpServletResponse.SC_OK);
-            resp.getWriter().write(response);
-        } catch (Exception e) {
-            logger.error("APIリクエスト処理中にエラーが発生しました", e);
-            resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            Map<String, String> error = new HashMap<>();
-            error.put("error", e.getMessage());
-            resp.getWriter().write(gson.toJson(error));
-        }
+            return handlePostRequest(path, body);
+        });
     }
     
     @Override
     protected void doPut(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        String path = req.getPathInfo();
-        if (path == null) {
-            path = "/";
-        }
-        
-        resp.setContentType("application/json; charset=UTF-8");
-        resp.setCharacterEncoding("UTF-8");
-        
-        try {
+        handleRequest(req, resp, () -> {
+            String path = getPath(req);
             String body = readRequestBody(req);
-            String response = handlePutRequest(path, body, req);
-            resp.setStatus(HttpServletResponse.SC_OK);
-            resp.getWriter().write(response);
-        } catch (Exception e) {
-            logger.error("APIリクエスト処理中にエラーが発生しました", e);
-            resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            Map<String, String> error = new HashMap<>();
-            error.put("error", e.getMessage());
-            resp.getWriter().write(gson.toJson(error));
-        }
+            return handlePutRequest(path, body);
+        });
     }
     
     @Override
     protected void doDelete(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        String path = req.getPathInfo();
-        if (path == null) {
-            path = "/";
-        }
-        
-        resp.setContentType("application/json; charset=UTF-8");
-        resp.setCharacterEncoding("UTF-8");
+        handleRequest(req, resp, () -> {
+            String path = getPath(req);
+            return handleDeleteRequest(path);
+        });
+    }
+    
+    /**
+     * 共通のリクエスト処理
+     */
+    private void handleRequest(HttpServletRequest req, HttpServletResponse resp, RequestHandler handler) throws IOException {
+        resp.setContentType(CONTENT_TYPE_JSON);
+        resp.setCharacterEncoding(CHARSET_UTF8);
         
         try {
-            String response = handleDeleteRequest(path, req);
+            String response = handler.handle();
             resp.setStatus(HttpServletResponse.SC_OK);
             resp.getWriter().write(response);
         } catch (Exception e) {
-            logger.error("APIリクエスト処理中にエラーが発生しました", e);
+            logger.error(API_ERROR_MSG, e);
             resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            Map<String, String> error = new HashMap<>();
-            error.put("error", e.getMessage());
-            resp.getWriter().write(gson.toJson(error));
+            writeErrorResponse(resp, e.getMessage());
         }
     }
     
-    private String handleGetRequest(String path, HttpServletRequest req) {
+    /**
+     * パス情報を取得
+     */
+    private String getPath(HttpServletRequest req) {
+        String path = req.getPathInfo();
+        return path != null ? path : "/";
+    }
+    
+    /**
+     * エラーレスポンスを書き込み
+     */
+    private void writeErrorResponse(HttpServletResponse resp, String message) throws IOException {
+        Map<String, String> error = new HashMap<>();
+        error.put(ERROR_KEY, message);
+        resp.getWriter().write(gson.toJson(error));
+    }
+    
+    /**
+     * 成功レスポンスを生成
+     */
+    private String createSuccessResponse(String message) {
+        Map<String, Object> response = new HashMap<>();
+        response.put(SUCCESS_KEY, true);
+        response.put(MESSAGE_KEY, message);
+        return gson.toJson(response);
+    }
+    
+    /**
+     * リクエストハンドラーインターフェース
+     */
+    @FunctionalInterface
+    private interface RequestHandler {
+        String handle() throws Exception;
+    }
+    
+    private String handleGetRequest(String path) {
         if (path.equals("/status")) {
             Map<String, Object> status = new HashMap<>();
             status.put("running", server.isRunning());
@@ -147,27 +149,16 @@ public class ApiServlet extends HttpServlet {
                 .map(info -> {
                     Map<String, Object> dateMap = new HashMap<>();
                     dateMap.put("date", info.getDate());
-                    dateMap.put("enabled", info.isEnabled());
+                    dateMap.put(ENABLED_KEY, info.isEnabled());
                     dateMap.put("status", info.getStatus().name());
                     dateMap.put("selectedTimeSlots", info.getSelectedTimeSlots());
                     return dateMap;
                 })
-                .collect(Collectors.toList());
+                .toList();
             return gson.toJson(dates);
         } else if (path.equals("/completed-reservations")) {
-            Map<LocalDate, List<String>> completedWithTimeSlots = dateManager.getCompletedReservationsWithTimeSlots();
-            // 後方互換性のため、日付のみのリストも返す
-            List<LocalDate> completed = dateManager.getCompletedReservations();
-            
-            // 時間帯情報を含む形式で返す
-            List<Map<String, Object>> result = new ArrayList<>();
-            for (LocalDate date : completed) {
-                Map<String, Object> item = new HashMap<>();
-                item.put("date", date.toString());
-                List<String> timeSlots = completedWithTimeSlots.get(date);
-                item.put("timeSlots", timeSlots != null ? timeSlots : new ArrayList<>());
-                result.add(item);
-            }
+            // 時間帯と先生URL情報を含む形式で返す
+            List<Map<String, Object>> result = dateManager.getCompletedReservationsWithDetails();
             return gson.toJson(result);
         } else if (path.equals("/config")) {
             Config config = Config.getInstance();
@@ -178,17 +169,12 @@ public class ApiServlet extends HttpServlet {
             configMap.put("monitoringTimeRestriction", config.isMonitoringTimeRestrictionEnabled());
             return gson.toJson(configMap);
         } else {
-            throw new IllegalArgumentException("Unknown endpoint: " + path);
+            throw new IllegalArgumentException(UNKNOWN_ENDPOINT_MSG + path);
         }
     }
     
-    private String handlePostRequest(String path, String body, HttpServletRequest req) {
+    private String handlePostRequest(String path, String body) {
         if (path.equals("/monitoring/start")) {
-            Map<String, Object> request = gson.fromJson(body, Map.class);
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "監視を開始しました");
-            
             // 別スレッドで監視を開始
             new Thread(() -> {
                 try {
@@ -199,23 +185,17 @@ public class ApiServlet extends HttpServlet {
                 }
             }).start();
             
-            return gson.toJson(response);
+            return createSuccessResponse("監視を開始しました");
         } else if (path.equals("/monitoring/stop")) {
             bot.stopMonitoring();
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "監視を停止しました");
-            return gson.toJson(response);
+            return createSuccessResponse("監視を停止しました");
         } else if (path.equals("/dates")) {
             Map<String, Object> request = gson.fromJson(body, Map.class);
             String dateStr = (String) request.get("date");
             LocalDate date = LocalDate.parse(dateStr);
             dateManager.addDate(date);
             
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "日付を追加しました");
-            return gson.toJson(response);
+            return createSuccessResponse("日付を追加しました");
         } else if (path.equals("/manual-reserve")) {
             Map<String, Object> request = gson.fromJson(body, Map.class);
             String dateStr = (String) request.get("date");
@@ -232,23 +212,20 @@ public class ApiServlet extends HttpServlet {
                 }
             }).start();
             
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "手動予約を開始しました");
-            return gson.toJson(response);
+            return createSuccessResponse("手動予約を開始しました");
         } else {
-            throw new IllegalArgumentException("Unknown endpoint: " + path);
+            throw new IllegalArgumentException(UNKNOWN_ENDPOINT_MSG + path);
         }
     }
     
-    private String handlePutRequest(String path, String body, HttpServletRequest req) {
-        if (path.startsWith("/dates/")) {
-            String dateStr = path.substring("/dates/".length());
+    private String handlePutRequest(String path, String body) {
+        if (path.startsWith(DATES_PATH_PREFIX)) {
+            String dateStr = path.substring(DATES_PATH_PREFIX.length());
             LocalDate date = LocalDate.parse(dateStr);
             Map<String, Object> request = gson.fromJson(body, Map.class);
             
-            if (request.containsKey("enabled")) {
-                boolean enabled = (Boolean) request.get("enabled");
+            if (request.containsKey(ENABLED_KEY)) {
+                boolean enabled = (Boolean) request.get(ENABLED_KEY);
                 if (enabled != dateManager.getDateInfo(date).isEnabled()) {
                     dateManager.toggleDate(date);
                 }
@@ -263,36 +240,27 @@ public class ApiServlet extends HttpServlet {
                 }
             }
             
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "日付を更新しました");
-            return gson.toJson(response);
+            return createSuccessResponse("日付を更新しました");
         } else if (path.equals("/config/monitoring-time-restriction")) {
             Map<String, Object> request = gson.fromJson(body, Map.class);
-            boolean enabled = (Boolean) request.get("enabled");
+            boolean enabled = (Boolean) request.get(ENABLED_KEY);
             Config.getInstance().setMonitoringTimeRestrictionEnabled(enabled);
             
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "監視時間制限を更新しました");
-            return gson.toJson(response);
+            return createSuccessResponse("監視時間制限を更新しました");
         } else {
-            throw new IllegalArgumentException("Unknown endpoint: " + path);
+            throw new IllegalArgumentException(UNKNOWN_ENDPOINT_MSG + path);
         }
     }
     
-    private String handleDeleteRequest(String path, HttpServletRequest req) {
-        if (path.startsWith("/dates/")) {
-            String dateStr = path.substring("/dates/".length());
+    private String handleDeleteRequest(String path) {
+        if (path.startsWith(DATES_PATH_PREFIX)) {
+            String dateStr = path.substring(DATES_PATH_PREFIX.length());
             LocalDate date = LocalDate.parse(dateStr);
             dateManager.removeDate(date);
             
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "日付を削除しました");
-            return gson.toJson(response);
+            return createSuccessResponse("日付を削除しました");
         } else {
-            throw new IllegalArgumentException("Unknown endpoint: " + path);
+            throw new IllegalArgumentException(UNKNOWN_ENDPOINT_MSG + path);
         }
     }
     

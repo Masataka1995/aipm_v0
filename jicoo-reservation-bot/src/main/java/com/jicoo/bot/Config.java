@@ -315,9 +315,9 @@ public class Config {
         ZonedDateTime now = ZonedDateTime.now(JAPAN_ZONE);
         int currentHour = now.getHour();
         
-        // 監視時間が24時を跨ぐ場合（endHour < startHour、例：8時から翌日の2時まで）
+        // 監視時間が24時を跨ぐ場合（endHour < startHour、例：20時から翌日の2時まで）
         if (monitoringEndHour < monitoringStartHour) {
-            // 8時以降（8-23時）または2時未満（0-1時）が監視時間内
+            // 20時以降（20-23時）または2時未満（0-1時）が監視時間内
             return currentHour >= monitoringStartHour || currentHour < monitoringEndHour;
         } else {
             // 通常の場合（例：9時から20時まで）
@@ -335,16 +335,16 @@ public class Config {
         
         int currentHour = now.getHour();
         
-        // 監視時間が24時を跨ぐ場合（endHour < startHour、例：8時から翌日の2時まで）
+        // 監視時間が24時を跨ぐ場合（endHour < startHour、例：20時から翌日の2時まで）
         if (monitoringEndHour < monitoringStartHour) {
             if (currentHour >= monitoringStartHour) {
-                // 8時以降は監視時間内（次の開始は翌日の8時）
+                // 20時以降は監視時間内（次の開始は翌日の20時）
                 return 0;
             } else if (currentHour < monitoringEndHour) {
-                // 2時未満も監視時間内（次の開始は今日の8時）
+                // 2時未満も監視時間内（次の開始は今日の20時）
                 nextStart = now.withHour(monitoringStartHour).withMinute(0).withSecond(0).withNano(0);
             } else {
-                // 2時から8時未満は監視時間外（次の開始は今日の8時）
+                // 2時から20時未満は監視時間外（次の開始は今日の20時）
                 nextStart = now.withHour(monitoringStartHour).withMinute(0).withSecond(0).withNano(0);
             }
         } else {

@@ -61,10 +61,19 @@ public class DriverManager {
     }
     
     /**
-     * WebDriverを終了
+     * WebDriverを終了（エラーを無視して安全に終了）
      * @param driver 終了するWebDriver
      */
     public static void closeWebDriver(WebDriver driver) {
+        closeWebDriver(driver, false);
+    }
+    
+    /**
+     * WebDriverを終了
+     * @param driver 終了するWebDriver
+     * @param silent エラーをログに出力しない場合true（デフォルト: false）
+     */
+    public static void closeWebDriver(WebDriver driver, boolean silent) {
         if (driver == null) {
             return;
         }
@@ -72,25 +81,35 @@ public class DriverManager {
         try {
             // まず通常の終了を試みる
             driver.quit();
-            logger.info("WebDriverを終了しました");
+            if (!silent) {
+                logger.info("WebDriverを終了しました");
+            }
         } catch (Exception e) {
             // InterruptedExceptionが原因の場合は警告レベル（シャットダウン処理が中断されただけ）
             Throwable cause = e.getCause();
             if (cause instanceof InterruptedException || e instanceof InterruptedException) {
-                logger.warn("WebDriverの終了処理が中断されました（無視して続行）: {}", e.getMessage());
+                if (!silent) {
+                    logger.warn("WebDriverの終了処理が中断されました（無視して続行）: {}", e.getMessage());
+                }
                 // スレッドの割り込み状態を復元
                 Thread.currentThread().interrupt();
             } else {
                 // その他のエラーも警告レベル（WebDriverは既に終了している可能性がある）
-                logger.warn("WebDriverの終了中にエラーが発生しました（無視して続行）: {}", e.getMessage());
+                if (!silent) {
+                    logger.warn("WebDriverの終了中にエラーが発生しました（無視して続行）: {}", e.getMessage());
+                }
             }
             
             // quit()が失敗した場合、close()を試みる
             try {
                 driver.close();
-                logger.debug("WebDriverをclose()で終了しました");
+                if (!silent) {
+                    logger.debug("WebDriverをclose()で終了しました");
+                }
             } catch (Exception closeException) {
-                logger.debug("WebDriverのclose()も失敗しました（無視）: {}", closeException.getMessage());
+                if (!silent) {
+                    logger.debug("WebDriverのclose()も失敗しました（無視）: {}", closeException.getMessage());
+                }
             }
         }
     }

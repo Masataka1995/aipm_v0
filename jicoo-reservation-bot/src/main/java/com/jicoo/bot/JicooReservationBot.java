@@ -18,6 +18,14 @@ import java.util.Map;
 public class JicooReservationBot {
     private static final Logger logger = LoggerFactory.getLogger(JicooReservationBot.class);
     
+    // 定数定義
+    private static final String SEPARATOR = "========================================";
+    private static final String RETRY_INTERRUPTED_MSG = "再試行待機中に中断されました";
+    private static final long RETRY_WAIT_MS = 60000L; // 1分
+    private static final long SLEEP_RECOVERY_WAIT_MS = 120000L; // 2分
+    private static final long SLEEP_DETECTION_THRESHOLD_MS = 300000L; // 5分
+    private static final long MONITORING_CHECK_INTERVAL_MS = 1000L; // 1秒
+    
     private final Config config;
     private final ReservationService reservationService;
     private WebDriver driver;
@@ -38,6 +46,14 @@ public class JicooReservationBot {
          */
         default void onReservationResult(LocalDate date, boolean success, List<String> timeSlots) {
             onReservationResult(date, success);
+        }
+        
+        /**
+         * 予約結果のコールバック（時間帯と先生URL付き）
+         * デフォルト実装では時間帯付きのメソッドを呼び出す
+         */
+        default void onReservationResult(LocalDate date, boolean success, List<String> timeSlots, String teacherUrl) {
+            onReservationResult(date, success, timeSlots);
         }
     }
     
@@ -65,9 +81,9 @@ public class JicooReservationBot {
      * @param args コマンドライン引数
      */
     public static void main(String[] args) {
-        logger.info("========================================");
+        logger.info(SEPARATOR);
         logger.info("Jicoo自動予約BOT 起動");
-        logger.info("========================================");
+        logger.info(SEPARATOR);
         
         JicooReservationBot bot = new JicooReservationBot();
         
@@ -79,9 +95,9 @@ public class JicooReservationBot {
             bot.stopMonitoring();
         }
         
-        logger.info("========================================");
+        logger.info(SEPARATOR);
         logger.info("Jicoo自動予約BOT 終了");
-        logger.info("========================================");
+        logger.info(SEPARATOR);
     }
     
     /**
@@ -127,13 +143,15 @@ public class JicooReservationBot {
         }
         
         // URLリストを取得
-        List<String> urls = config.getUrls();
+        List<String> urls = new ArrayList<>(config.getUrls()); // 元のリストを変更しないようにコピー
         if (urls.isEmpty()) {
             logger.error("監視対象URLが設定されていません");
             return;
         }
         
-        logger.info("監視対象URL数: {}", urls.size());
+        // URLの順序をランダムにシャッフル（優先度をランダム化）
+        java.util.Collections.shuffle(urls, new java.util.Random());
+        logger.info("監視対象URL数: {} (順序をランダム化しました)", urls.size());
         for (int i = 0; i < urls.size(); i++) {
             logger.info("  {}: {}", i + 1, urls.get(i));
         }
@@ -193,9 +211,9 @@ public class JicooReservationBot {
                                 return;
                             }
                             
-                            logger.info("========================================");
+                            logger.info(SEPARATOR);
                             logger.info("監視開始: 日付={}, URL={}, 時間帯={}", date, url, finalTimeSlots);
-                            logger.info("========================================");
+                            logger.info(SEPARATOR);
                             
                             // このURL×日付の組み合わせ用に新しいWebDriverを作成（既に存在する場合は再作成しない）
                             if (urlDriver == null) {
@@ -210,10 +228,10 @@ public class JicooReservationBot {
                                     // WebDriver作成失敗時は1分待機してから再試行
                                     logger.info("1分後に再試行します...");
                                     try {
-                                        Thread.sleep(60000);
+                                        Thread.sleep(RETRY_WAIT_MS);
                                     } catch (InterruptedException ie) {
                                         Thread.currentThread().interrupt();
-                                        logger.warn("再試行待機中に中断されました");
+                                        logger.warn(RETRY_INTERRUPTED_MSG);
                                         latch.countDown();
                                         return;
                                     }
@@ -225,15 +243,11 @@ public class JicooReservationBot {
                                 // スリープモード検知：システム時間の大きな変化をチェック
                                 long currentTime = System.currentTimeMillis();
                                 long timeDiff = currentTime - lastActivityTime;
-                                if (timeDiff > 300000) { // 5分以上の時間差がある場合（スリープから復帰した可能性）
+                                if (timeDiff > SLEEP_DETECTION_THRESHOLD_MS) { // 5分以上の時間差がある場合（スリープから復帰した可能性）
                                     logger.warn("【スリープ検知】システム時間の大きな変化を検知しました（{}分）。スリープから復帰した可能性があります", timeDiff / 60000);
                                     logger.warn("【スリープ検知】WebDriverを再作成して監視を再開します");
                                     // WebDriverをクリーンアップして再作成
-                                    try {
-                                        DriverManager.closeWebDriver(urlDriver);
-                                    } catch (Exception e) {
-                                        logger.debug("スリープ復帰時のWebDriverクリーンアップでエラー（無視します）: {}", e.getMessage());
-                                    }
+                                    DriverManager.closeWebDriver(urlDriver, true); // silent=trueでエラーを無視
                                     urlDriver = null; // 再作成のためnullに設定
                                     lastActivityTime = currentTime;
                                 } else {
@@ -252,10 +266,10 @@ public class JicooReservationBot {
                                         logger.error("WebDriverの再作成に失敗しました: 日付={}, URL={}", date, url);
                                         // 1分待機してから再試行
                                         try {
-                                            Thread.sleep(60000);
+                                            Thread.sleep(RETRY_WAIT_MS);
                                         } catch (InterruptedException ie) {
                                             Thread.currentThread().interrupt();
-                                            logger.warn("再試行待機中に中断されました");
+                                            logger.warn(RETRY_INTERRUPTED_MSG);
                                             break;
                                         }
                                         continue; // ループを継続
@@ -267,11 +281,7 @@ public class JicooReservationBot {
                                     urlDriver.getCurrentUrl(); // 接続状態を確認
                                 } catch (Exception e) {
                                     logger.warn("【接続切断検知】WebDriverの接続が切断されました。再作成します: {}", e.getMessage());
-                                    try {
-                                        DriverManager.closeWebDriver(urlDriver);
-                                    } catch (Exception closeEx) {
-                                        logger.debug("WebDriverクリーンアップでエラー（無視します）: {}", closeEx.getMessage());
-                                    }
+                                    DriverManager.closeWebDriver(urlDriver, true); // silent=trueでエラーを無視
                                     urlDriver = null; // 再作成のためnullに設定
                                     continue; // ループを継続して再作成
                                 }
@@ -305,18 +315,14 @@ public class JicooReservationBot {
                                     dateSuccessMap.get(date).set(true);
                                     logger.info("日付 {} の予約が成功したため、この日の他のタスクを停止します", date);
                                     
-                                    // GUIに結果を通知（時間帯付き）
+                                    // GUIに結果を通知（時間帯と先生URL付き）
                                     if (guiCallback != null) {
-                                        guiCallback.onReservationResult(date, true, finalTimeSlots);
+                                        guiCallback.onReservationResult(date, true, finalTimeSlots, url);
                                     }
                                     
-                                    // 成功したらWebDriverをクリーンアップしてループを終了
-                                    try {
-                                        DriverManager.closeWebDriver(urlDriver);
-                                    } catch (Exception e) {
-                                        logger.warn("WebDriverのクリーンアップ中にエラー: {}", e.getMessage());
-                                    }
-                                    urlDriver = null;
+                                    // 予約成功時はWebDriverをクローズせず、ブラウザを開いたままにする
+                                    logger.info("予約が成功したため、ブラウザを開いたままにします: URL={}", url);
+                                    urlDriver = null; // 参照を解除するが、ブラウザは開いたまま
                                     break;
                                 } else {
                                     // この日付の予約が既に成功している場合は失敗として扱わない
@@ -340,10 +346,10 @@ public class JicooReservationBot {
                             // 失敗した場合は1分待機してから再試行（urlDriverは保持）
                             if (!dateSuccessMap.get(date).get() && isMonitoring && !shouldStopMonitoring) {
                                 try {
-                                    Thread.sleep(60000);
+                                    Thread.sleep(RETRY_WAIT_MS);
                                 } catch (InterruptedException ie) {
                                     Thread.currentThread().interrupt();
-                                    logger.warn("再試行待機中に中断されました");
+                                    logger.warn(RETRY_INTERRUPTED_MSG);
                                     break;
                                 }
                             }
@@ -353,12 +359,8 @@ public class JicooReservationBot {
                             logger.warn("【スリープ検知】スリープから復帰後に自動的に再開します");
                             
                             // WebDriverをクリーンアップ
-                            try {
-                                if (urlDriver != null) {
-                                    DriverManager.closeWebDriver(urlDriver);
-                                }
-                            } catch (Exception closeEx) {
-                                logger.debug("WebDriverクリーンアップでエラー（無視します）: {}", closeEx.getMessage());
+                            if (urlDriver != null) {
+                                DriverManager.closeWebDriver(urlDriver, true); // silent=trueでエラーを無視
                             }
                             urlDriver = null; // 再作成のためnullに設定
                             
@@ -370,11 +372,11 @@ public class JicooReservationBot {
                             if (!dateSuccessMap.get(date).get() && isMonitoring && !shouldStopMonitoring) {
                                 try {
                                     logger.info("スリープから復帰を待機中...（2分後に再試行）");
-                                    Thread.sleep(120000);
+                                    Thread.sleep(SLEEP_RECOVERY_WAIT_MS);
                                     lastActivityTime = System.currentTimeMillis(); // 活動時間を更新
                                 } catch (InterruptedException ie) {
                                     Thread.currentThread().interrupt();
-                                    logger.warn("再試行待機中に中断されました");
+                                    logger.warn(RETRY_INTERRUPTED_MSG);
                                     break;
                                 }
                             }
@@ -387,11 +389,7 @@ public class JicooReservationBot {
                                     urlDriver.getCurrentUrl(); // 接続状態を確認
                                 } catch (Exception checkEx) {
                                     logger.warn("WebDriverの接続が切断されています。再作成します");
-                                    try {
-                                        DriverManager.closeWebDriver(urlDriver);
-                                    } catch (Exception closeEx) {
-                                        logger.debug("WebDriverクリーンアップでエラー（無視します）: {}", closeEx.getMessage());
-                                    }
+                                    DriverManager.closeWebDriver(urlDriver, true); // silent=trueでエラーを無視
                                     urlDriver = null; // 再作成のためnullに設定
                                 }
                             }
@@ -403,10 +401,10 @@ public class JicooReservationBot {
                             // エラー発生時も1分待機してから再試行
                             if (!dateSuccessMap.get(date).get() && isMonitoring && !shouldStopMonitoring) {
                                 try {
-                                    Thread.sleep(60000);
+                                    Thread.sleep(RETRY_WAIT_MS);
                                 } catch (InterruptedException ie) {
                                     Thread.currentThread().interrupt();
-                                    logger.warn("再試行待機中に中断されました");
+                                    logger.warn(RETRY_INTERRUPTED_MSG);
                                     break;
                                 }
                             }
@@ -415,11 +413,7 @@ public class JicooReservationBot {
                     
                     // ループ終了時にWebDriverをクリーンアップ
                     if (urlDriver != null) {
-                        try {
-                            DriverManager.closeWebDriver(urlDriver);
-                        } catch (Exception e) {
-                            logger.warn("WebDriverの最終クリーンアップ中にエラー: {}", e.getMessage());
-                        }
+                        DriverManager.closeWebDriver(urlDriver);
                     }
                     
                     // ループ終了時にlatchをカウントダウン
@@ -432,7 +426,7 @@ public class JicooReservationBot {
         // 代わりに、監視停止フラグが設定されるまで待機
         try {
             while (isMonitoring && !shouldStopMonitoring) {
-                Thread.sleep(1000); // 1秒ごとにチェック
+                Thread.sleep(MONITORING_CHECK_INTERVAL_MS); // 1秒ごとにチェック
             }
         } catch (InterruptedException e) {
             logger.error("待機中に中断されました", e);
@@ -452,21 +446,40 @@ public class JicooReservationBot {
             logger.error("待機中に中断されました", e);
             Thread.currentThread().interrupt();
         } finally {
-            executor.shutdown();
-            try {
-                if (!executor.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                    executor.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                executor.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
+            // ExecutorServiceの確実なシャットダウン
+            shutdownExecutorService(executor);
         }
         
         if (overallSuccess.get()) {
             logger.info("少なくとも1つの予約が成功しました");
         } else {
             logger.info("監視を継続中です（失敗しても再試行を続けます）");
+        }
+    }
+    
+    /**
+     * ExecutorServiceを安全にシャットダウン
+     * @param executor シャットダウンするExecutorService
+     */
+    private void shutdownExecutorService(java.util.concurrent.ExecutorService executor) {
+        if (executor == null || executor.isShutdown()) {
+            return;
+        }
+        
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                logger.warn("ExecutorServiceの正常終了がタイムアウトしました。強制終了します。");
+                executor.shutdownNow();
+                // 強制終了後も少し待機
+                if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    logger.error("ExecutorServiceの強制終了もタイムアウトしました");
+                }
+            }
+        } catch (InterruptedException e) {
+            logger.warn("ExecutorServiceのシャットダウン待機中に中断されました");
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
         }
     }
     

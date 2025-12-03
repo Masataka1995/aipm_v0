@@ -21,6 +21,14 @@ import jakarta.servlet.http.HttpServletResponse;
 public class StaticFileServlet extends HttpServlet {
     private static final Logger logger = LoggerFactory.getLogger(StaticFileServlet.class);
     private static final String WEBAPP_DIR = "src/main/webapp";
+    private static final String WEBAPP_PREFIX = "/webapp";
+    private static final String WEBAPP_NAME = "webapp";
+    private static final String CACHE_CONTROL_HEADER = "Cache-Control";
+    private static final String CACHE_CONTROL_VALUE = "no-cache, no-store, must-revalidate";
+    private static final String PRAGMA_HEADER = "Pragma";
+    private static final String PRAGMA_VALUE = "no-cache";
+    private static final String EXPIRES_HEADER = "Expires";
+    private static final String PATH_SEPARATOR = "/";
     
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -72,15 +80,15 @@ public class StaticFileServlet extends HttpServlet {
         if ((path == null || path.equals("/")) && servletPath != null && !servletPath.equals("/") && !servletPath.isEmpty()) {
             path = servletPath;
             // /webapp/プレフィックスを除去
-            if (path.startsWith("/webapp/")) {
-                path = path.substring("/webapp".length());
+            if (path.startsWith(WEBAPP_PREFIX + PATH_SEPARATOR)) {
+                path = path.substring(WEBAPP_PREFIX.length());
             }
             logger.info("✅ servletPathからパスを取得（フォールバック）: {}", path);
         }
         
         // requestURIから取得したパスにも/webapp/プレフィックスが含まれている可能性があるため除去
-        if (path != null && path.startsWith("/webapp/")) {
-            path = path.substring("/webapp".length());
+        if (path != null && path.startsWith(WEBAPP_PREFIX + PATH_SEPARATOR)) {
+            path = path.substring(WEBAPP_PREFIX.length());
             logger.info("✅ /webapp/プレフィックスを除去: {}", path);
         }
         
@@ -134,7 +142,7 @@ public class StaticFileServlet extends HttpServlet {
         // 複数の可能なパスを試行
         Path[] possiblePaths = {
             Paths.get(workingDir, WEBAPP_DIR, filePathStr).normalize(),
-            Paths.get(workingDir, "target", "classes", "webapp", filePathStr).normalize(),
+            Paths.get(workingDir, "target", "classes", WEBAPP_NAME, filePathStr).normalize(),
             Paths.get(workingDir, "target", "classes", WEBAPP_DIR, filePathStr).normalize()
         };
         
@@ -176,7 +184,7 @@ public class StaticFileServlet extends HttpServlet {
         // ファイルシステムから読み込めない場合、JAR内のリソースとして読み込む
         if (inputStream == null) {
             // リソースパスは "webapp" + path の形式（例: "webapp/bundle.js"）
-            String resourcePath = "webapp" + path;
+            String resourcePath = WEBAPP_NAME + path;
             logger.info("リソースパスを試行: {}", resourcePath);
             inputStream = getClass().getClassLoader().getResourceAsStream(resourcePath);
             
@@ -184,14 +192,14 @@ public class StaticFileServlet extends HttpServlet {
                 logger.info("✅ 静的ファイルを配信（JARリソース）: {} -> {}", requestURI, resourcePath);
             } else {
                 // 別のパス形式も試す（先頭スラッシュ付き）
-                String resourcePath2 = "/webapp" + path;
+                String resourcePath2 = WEBAPP_PREFIX + path;
                 logger.info("リソースパスを試行（スラッシュ付き）: {}", resourcePath2);
                 inputStream = getClass().getClassLoader().getResourceAsStream(resourcePath2);
                 if (inputStream != null) {
                     logger.info("✅ 静的ファイルを配信（JARリソース、スラッシュ付き）: {} -> {}", requestURI, resourcePath2);
                 } else {
                     // パスの先頭スラッシュを除去して再試行
-                    String resourcePath3 = "webapp" + (path.startsWith("/") ? path : "/" + path);
+                    String resourcePath3 = WEBAPP_NAME + (path.startsWith(PATH_SEPARATOR) ? path : PATH_SEPARATOR + path);
                     logger.info("リソースパスを試行（調整後）: {}", resourcePath3);
                     inputStream = getClass().getClassLoader().getResourceAsStream(resourcePath3);
                     if (inputStream != null) {
@@ -220,17 +228,17 @@ public class StaticFileServlet extends HttpServlet {
             // JavaScriptファイルの場合は空のJavaScriptを返す（エラーを避けるため）
             if (lowerPath.endsWith(".js")) {
                 resp.setContentType("application/javascript; charset=UTF-8");
-                resp.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-                resp.setHeader("Pragma", "no-cache");
-                resp.setDateHeader("Expires", 0);
+                resp.setHeader(CACHE_CONTROL_HEADER, CACHE_CONTROL_VALUE);
+                resp.setHeader(PRAGMA_HEADER, PRAGMA_VALUE);
+                resp.setDateHeader(EXPIRES_HEADER, 0);
                 resp.getWriter().write("// File not found: " + path + "\n// Please check server logs for details.\nconsole.error('File not found: " + path + "');");
                 logger.error("❌ JavaScriptファイルが見つかりません: {} (試行したリソースパス: {}, ファイルパス: {}, 作業ディレクトリ: {}, ファイル存在: {})", 
                     path, attemptedResourcePaths, filePathInfo, workingDir, fileExists);
             } else if (lowerPath.endsWith(".css")) {
                 resp.setContentType("text/css; charset=UTF-8");
-                resp.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-                resp.setHeader("Pragma", "no-cache");
-                resp.setDateHeader("Expires", 0);
+                resp.setHeader(CACHE_CONTROL_HEADER, CACHE_CONTROL_VALUE);
+                resp.setHeader(PRAGMA_HEADER, PRAGMA_VALUE);
+                resp.setDateHeader(EXPIRES_HEADER, 0);
                 resp.getWriter().write("/* File not found: " + path + " */");
                 logger.error("❌ CSSファイルが見つかりません: {} (試行したリソースパス: {}, ファイルパス: {}, 作業ディレクトリ: {}, ファイル存在: {})", 
                     path, attemptedResourcePaths, filePathInfo, workingDir, fileExists);
@@ -260,12 +268,12 @@ public class StaticFileServlet extends HttpServlet {
         // キャッシュ制御ヘッダーを設定
         // HTMLとJavaScriptはキャッシュしない（開発時）
         if (path.endsWith(".html") || path.endsWith(".js")) {
-            resp.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-            resp.setHeader("Pragma", "no-cache");
-            resp.setDateHeader("Expires", 0);
+            resp.setHeader(CACHE_CONTROL_HEADER, CACHE_CONTROL_VALUE);
+            resp.setHeader(PRAGMA_HEADER, PRAGMA_VALUE);
+            resp.setDateHeader(EXPIRES_HEADER, 0);
         } else {
             // その他の静的ファイルは1時間キャッシュ
-            resp.setHeader("Cache-Control", "public, max-age=3600");
+            resp.setHeader(CACHE_CONTROL_HEADER, "public, max-age=3600");
         }
         
         // ファイルを読み込んで送信
