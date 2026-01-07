@@ -510,6 +510,55 @@ body {
   padding-right: 5px;
 }
 
+/* 先生選択セクション */
+.teacher-selection {
+  background: white;
+  border-radius: var(--border-radius);
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: var(--card-shadow);
+}
+
+.teacher-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 15px;
+}
+
+.teacher-item {
+  background: white;
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  padding: 15px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: var(--transition);
+  box-shadow: var(--card-shadow);
+}
+
+.teacher-item:hover {
+  box-shadow: var(--card-shadow-hover);
+  transform: translateY(-2px);
+  border-color: var(--primary-color);
+}
+
+.teacher-item input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: var(--primary-color);
+}
+
+.teacher-label {
+  font-size: 16px;
+  font-weight: 500;
+  color: #333;
+  cursor: pointer;
+  flex: 1;
+}
+
 .empty-state {
   text-align: center;
   padding: 40px 20px;
@@ -788,6 +837,24 @@ body {
   color: var(--primary-color);
   font-weight: bold;
   font-size: 0.95em;
+}
+
+.reservation-teacher .teacher-name-link {
+  color: var(--primary-color);
+  font-weight: bold;
+  font-size: 0.95em;
+  text-decoration: none;
+  transition: var(--transition);
+  cursor: pointer;
+}
+
+.reservation-teacher .teacher-name-link:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
+
+.reservation-teacher .teacher-name-link:active {
+  color: var(--secondary-color);
 }
 
 .completed-item .lesson-time.past {

@@ -27,9 +27,13 @@ public class DateManager {
     private static final Logger logger = LoggerFactory.getLogger(DateManager.class);
     private static final String DATA_DIR = "data";
     private static final String COMPLETED_RESERVATIONS_FILE = "completed-reservations.json";
+    private static final String SELECTED_TEACHERS_FILE = "selected-teachers.json";
     private static final Gson gson = new GsonBuilder()
         .setPrettyPrinting()
         .create();
+    
+    // 選択された先生のURLリスト（デフォルトはすべて選択）
+    private List<String> selectedTeacherUrls;
     
     /**
      * 予約結果の状態
@@ -108,7 +112,8 @@ public class DateManager {
      */
     public static final List<String> AVAILABLE_TIME_SLOTS = List.of(
         "9:45", "10:30", "11:15", "12:00",
-        "16:00", "16:45", "17:30", "18:15", "19:00", "19:45", "20:25"
+        "13:00", "13:45", "14:30", "15:15",
+        "16:00", "16:45", "17:30", "18:15", "19:00", "19:45"
     );
     
     private final List<DateInfo> dateList;
@@ -121,10 +126,13 @@ public class DateManager {
         this.completedReservations = new ArrayList<>();
         this.completedReservationsWithTimeSlots = new HashMap<>();
         this.completedReservationsWithTeacherUrl = new HashMap<>();
+        this.selectedTeacherUrls = new ArrayList<>();
         // デフォルトで今日と明日の日付を追加
         addTodayAndTomorrow();
         // 永続化されたデータを読み込む
         loadCompletedReservations();
+        // 選択された先生を読み込む（デフォルトはすべて選択）
+        loadSelectedTeachers();
     }
     
     /**
@@ -258,6 +266,9 @@ public class DateManager {
                 // 先生URLも保存
                 if (teacherUrl != null && !teacherUrl.isEmpty()) {
                     completedReservationsWithTeacherUrl.put(date, teacherUrl);
+                    logger.info("予約完了: 日付={}, 先生URL={}", date, teacherUrl);
+                } else {
+                    logger.warn("予約完了: 日付={}, 先生URLが空です", date);
                 }
                 // データを永続化
                 saveCompletedReservations();
@@ -427,6 +438,77 @@ public class DateManager {
             logger.error("予約完了データファイルの保存に失敗しました: {}", e.getMessage(), e);
         } catch (Exception e) {
             logger.error("予約完了データの保存中に予期しないエラーが発生しました", e);
+        }
+    }
+    
+    /**
+     * 選択された先生のURLリストを取得
+     */
+    public List<String> getSelectedTeacherUrls() {
+        return new ArrayList<>(selectedTeacherUrls);
+    }
+    
+    /**
+     * 選択された先生のURLリストを設定
+     */
+    public void setSelectedTeacherUrls(List<String> urls) {
+        this.selectedTeacherUrls = new ArrayList<>(urls);
+        saveSelectedTeachers();
+    }
+    
+    /**
+     * 選択された先生を読み込む
+     */
+    private void loadSelectedTeachers() {
+        Path dataDir = Paths.get(DATA_DIR);
+        Path filePath = dataDir.resolve(SELECTED_TEACHERS_FILE);
+        
+        if (!Files.exists(filePath)) {
+            logger.info("選択された先生のデータファイルが存在しません。デフォルト（すべて選択）を使用します: {}", filePath);
+            // デフォルト：ConfigからすべてのURLを取得
+            Config config = Config.getInstance();
+            this.selectedTeacherUrls = new ArrayList<>(config.getUrls());
+            saveSelectedTeachers();
+            return;
+        }
+        
+        try (FileReader reader = new FileReader(filePath.toFile())) {
+            @SuppressWarnings("unchecked")
+            List<String> loaded = gson.fromJson(reader, new TypeToken<List<String>>(){}.getType());
+            if (loaded != null && !loaded.isEmpty()) {
+                this.selectedTeacherUrls = new ArrayList<>(loaded);
+                logger.info("選択された先生を読み込みました: {}件", selectedTeacherUrls.size());
+            } else {
+                // 空の場合はデフォルト（すべて選択）
+                Config config = Config.getInstance();
+                this.selectedTeacherUrls = new ArrayList<>(config.getUrls());
+                saveSelectedTeachers();
+            }
+        } catch (Exception e) {
+            logger.warn("選択された先生の読み込み中にエラーが発生しました。デフォルト（すべて選択）を使用します: {}", e.getMessage());
+            Config config = Config.getInstance();
+            this.selectedTeacherUrls = new ArrayList<>(config.getUrls());
+        }
+    }
+    
+    /**
+     * 選択された先生を保存
+     */
+    private void saveSelectedTeachers() {
+        try {
+            // データディレクトリを作成
+            Path dataDir = Paths.get(DATA_DIR);
+            if (!Files.exists(dataDir)) {
+                Files.createDirectories(dataDir);
+            }
+            
+            Path filePath = dataDir.resolve(SELECTED_TEACHERS_FILE);
+            try (FileWriter writer = new FileWriter(filePath.toFile())) {
+                gson.toJson(selectedTeacherUrls, writer);
+                logger.debug("選択された先生を保存しました: {}件", selectedTeacherUrls.size());
+            }
+        } catch (Exception e) {
+            logger.error("選択された先生の保存中にエラーが発生しました", e);
         }
     }
 }

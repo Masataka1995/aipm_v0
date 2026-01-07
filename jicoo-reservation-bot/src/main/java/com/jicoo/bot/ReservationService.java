@@ -54,9 +54,17 @@ public class ReservationService {
     private static final String ERROR_MESSAGE_FORMAT = "エラーメッセージ: %s, エラークラス: %s%s";
     
     private final Config config;
+    private DateManager dateManager; // 予約完了状態を共有するため（オプショナル）
     
     public ReservationService(Config config) {
         this.config = config;
+    }
+    
+    /**
+     * DateManagerを設定（予約完了状態を共有するため）
+     */
+    public void setDateManager(DateManager dateManager) {
+        this.dateManager = dateManager;
     }
     
     /**
@@ -102,7 +110,13 @@ public class ReservationService {
      * @return 予約が成功した場合true
      */
     public boolean processUrl(WebDriver driver, String url, LocalDate targetDate, List<String> timeSlots, AtomicBoolean dateSuccessFlag) {
+        String teacherName = extractTeacherNameFromUrl(url);
+        logger.info("【開始】予約処理を開始します - 先生: {}, URL: {}, 対象日付: {}, 時間帯: {}", teacherName, url, targetDate, timeSlots);
         logger.debug("URL処理開始: {}, 対象日付: {}, 時間帯: {}", url, targetDate, timeSlots);
+        
+        // 先生名の抽出メソッド
+        // URL形式: https://www.jicoo.com/t/_XDgWVCOgMPP/e/Teacher_Vanessa
+        // 最後の /e/ 以降を取得
         
         // 監視時間内かどうかをチェック（日本時間）
         if (!config.isWithinMonitoringHours()) {
@@ -116,14 +130,37 @@ public class ReservationService {
             timeSlots = List.of(config.getTargetTime());
         }
         
+        // この日付の予約が既に完了している場合は処理をスキップ（DateManagerの完了リストをチェック）
+        if (dateManager != null && dateManager.getCompletedReservations().contains(targetDate)) {
+            logger.info("【SKIP】processUrl - 日付 {} の予約が既に完了しているため、処理をスキップします: 先生={}", targetDate, teacherName);
+            return false;
+        }
+        
         try {
             // URLに日付パラメータを追加
-            String urlWithDate = addDateParameterToUrl(url, targetDate);
+            String urlWithDate;
+            try {
+                urlWithDate = addDateParameterToUrl(url, targetDate);
+            } catch (IllegalArgumentException e) {
+                logger.error("【ERROR】{} - URLの生成に失敗しました: {}", teacherName, e.getMessage());
+                return false;
+            }
+            logger.info("【URL確認】{} - 元のURL: {}", teacherName, url);
+            logger.info("【URL確認】{} - 日付パラメータ付きURL: {}", teacherName, urlWithDate);
             logger.debug("日付パラメータ付きURL: {}", urlWithDate);
+            
+            // URLの検証（data:や無効なURLをチェック）
+            if (urlWithDate == null || urlWithDate.isEmpty() || 
+                urlWithDate.startsWith("data:") || !urlWithDate.startsWith("http")) {
+                logger.error("【ERROR】{} - 無効なURLが生成されました: {}", teacherName, urlWithDate);
+                logger.error("【ERROR】processUrl - 無効なURLが生成されました: {}", urlWithDate);
+                return false;
+            }
             
             // URLへアクセス
             try {
                 logger.debug("【STEP】processUrl - URLへアクセス開始: {}", urlWithDate);
+                logger.info("【STEP】{} - URLへアクセス開始: {}", teacherName, urlWithDate);
                 driver.get(urlWithDate);
                 logger.debug("【STEP】processUrl - ページにアクセスしました: {}", urlWithDate);
             } catch (UnreachableBrowserException e) {
@@ -146,6 +183,15 @@ public class ReservationService {
             // ページ読み込み待機（共通メソッドを使用）
             waitForPageLoad(driver);
             
+            // アクセス後のURLを確認
+            String actualUrl = driver.getCurrentUrl();
+            logger.info("【URL確認】{} - アクセス後のURL: {}", teacherName, actualUrl);
+            if (actualUrl != null && (actualUrl.startsWith("data:") || actualUrl.isEmpty() || !actualUrl.startsWith("http"))) {
+                logger.error("【ERROR】{} - アクセス後に無効なURLが検出されました: {}", teacherName, actualUrl);
+                logger.error("【ERROR】processUrl - アクセス後に無効なURLが検出されました: {}", actualUrl);
+                return false;
+            }
+            
             // ログインポップアップ処理
             logger.debug("【STEP】processUrl - ログインポップアップ処理を開始します");
             if (!handleLoginPopup(driver)) {
@@ -161,61 +207,79 @@ public class ReservationService {
             
             // 選択された時間帯を順番に監視（日付は既に選択済み）
             for (String timeSlot : timeSlots) {
-                // この日付の予約が既に成功している場合はスキップ
-                if (dateSuccessFlag != null && dateSuccessFlag.get()) {
+                // この日付の予約が既に成功している場合はスキップ（dateSuccessFlagとDateManagerの両方をチェック）
+                if ((dateSuccessFlag != null && dateSuccessFlag.get()) || 
+                    (dateManager != null && dateManager.getCompletedReservations().contains(targetDate))) {
                     logger.info("【SKIP】processUrl - 日付 {} の予約が既に成功しているため、時間帯 {} の監視をスキップします", targetDate, timeSlot);
                     break;
                 }
                 
                 logger.debug("【STEP】processUrl - 時間帯 {} を監視します（日付は既に選択済み）", timeSlot);
-                if (monitorTimeSlot(driver, timeSlot, targetDate, dateSuccessFlag)) {
+                logger.info("【STEP】{} - 時間帯 {} の監視を開始します", teacherName, timeSlot);
+                // 元のURLを保持してmonitorTimeSlotに渡す
+                String originalUrl = url;
+                if (monitorTimeSlot(driver, timeSlot, targetDate, dateSuccessFlag, originalUrl)) {
+                    logger.info("【SUCCESS】{} - 時間帯 {} のクリックに成功しました", teacherName, timeSlot);
                     logger.info("【STEP】processUrl - 時間帯 {} のクリックに成功しました", timeSlot);
                     
-                    // この日付の予約が既に成功している場合はスキップ
-                    if (dateSuccessFlag != null && dateSuccessFlag.get()) {
+                    // この日付の予約が既に成功している場合はスキップ（dateSuccessFlagとDateManagerの両方をチェック）
+                    if ((dateSuccessFlag != null && dateSuccessFlag.get()) || 
+                        (dateManager != null && dateManager.getCompletedReservations().contains(targetDate))) {
                         logger.info("【SKIP】processUrl - 日付 {} の予約が既に成功しているため、フォーム入力をスキップします", targetDate);
                         break;
                     }
                     
                     // 予約フォーム入力
+                    logger.info("【STEP】{} - 予約フォーム入力を開始します", teacherName);
                     logger.info("【STEP】processUrl - 予約フォーム入力を開始します");
                     if (!fillReservationForm(driver, config.getReservationName(), config.getReservationEmail())) {
+                        logger.error("【ERROR】{} - 予約フォーム入力に失敗しました。次の時間帯を試行します", teacherName);
                         logger.error("【ERROR】processUrl - 予約フォーム入力に失敗しました。次の時間帯を試行します");
                         continue; // 次の時間帯を試行
                     }
+                    logger.info("【STEP】{} - 予約フォーム入力が完了しました", teacherName);
                     logger.info("【STEP】processUrl - 予約フォーム入力が完了しました");
                     
-                    // この日付の予約が既に成功している場合はスキップ
-                    if (dateSuccessFlag != null && dateSuccessFlag.get()) {
+                    // この日付の予約が既に成功している場合はスキップ（dateSuccessFlagとDateManagerの両方をチェック）
+                    if ((dateSuccessFlag != null && dateSuccessFlag.get()) || 
+                        (dateManager != null && dateManager.getCompletedReservations().contains(targetDate))) {
                         logger.info("【SKIP】processUrl - 日付 {} の予約が既に成功しているため、予約確定をスキップします", targetDate);
                         break;
                     }
                     
                     // 予約確定
+                    logger.info("【STEP】{} - 予約確定を開始します", teacherName);
                     logger.info("【STEP】processUrl - 予約確定を開始します");
                     if (!submitReservation(driver)) {
+                        logger.error("【ERROR】{} - 予約確定に失敗しました。次の時間帯を試行します", teacherName);
                         logger.error("【ERROR】processUrl - 予約確定に失敗しました。次の時間帯を試行します");
                         continue; // 次の時間帯を試行
                     }
+                    logger.info("【STEP】{} - 予約確定が完了しました", teacherName);
                     logger.info("【STEP】processUrl - 予約確定が完了しました");
                     
+                    logger.info("【SUCCESS】{} - 予約が成功しました！時間帯: {}", teacherName, timeSlot);
                     logger.info("【SUCCESS】processUrl - 予約が成功しました！時間帯: {}", timeSlot);
                     return true;
                 } else {
-                    // この日付の予約が既に成功している場合はスキップ
-                    if (dateSuccessFlag != null && dateSuccessFlag.get()) {
+                    // この日付の予約が既に成功している場合はスキップ（dateSuccessFlagとDateManagerの両方をチェック）
+                    if ((dateSuccessFlag != null && dateSuccessFlag.get()) || 
+                        (dateManager != null && dateManager.getCompletedReservations().contains(targetDate))) {
                         logger.info("【SKIP】processUrl - 日付 {} の予約が既に成功しているため、次の時間帯の監視をスキップします", targetDate);
                         break;
                     }
+                    logger.warn("【WARN】{} - 時間帯 {} の監視に失敗しました。次の時間帯を試行します", teacherName, timeSlot);
                     logger.warn("【WARN】processUrl - 時間帯 {} の監視に失敗しました。次の時間帯を試行します", timeSlot);
                 }
             }
             
+            logger.warn("【失敗】{} - すべての時間帯の監視に失敗しました", teacherName);
             logger.warn("すべての時間帯の監視に失敗しました");
             return false;
             
         } catch (UnreachableBrowserException e) {
             // ブラウザが予期せず終了した場合（リトライ可能）
+            logger.warn("【WARN】{} - ブラウザとの通信が切断されました（リトライ可能）", teacherName);
             logger.warn("【WARN】processUrl - ブラウザとの通信が切断されました（リトライ可能）");
             logger.warn("【WARN】processUrl - URL: {}, 対象日付: {}, 時間帯: {}", url, targetDate, timeSlots);
             if (e.getCause() instanceof InterruptedException) {
@@ -226,10 +290,12 @@ public class ReservationService {
         } catch (Exception e) {
             // InterruptedExceptionが原因の場合は警告レベル
             if (e.getCause() instanceof InterruptedException || e instanceof InterruptedException) {
+                logger.warn("【WARN】{} - URL処理が中断されました（リトライ可能）", teacherName);
                 logger.warn("【WARN】processUrl - URL処理が中断されました（リトライ可能）");
                 logger.warn("【WARN】processUrl - URL: {}, 対象日付: {}, 時間帯: {}", url, targetDate, timeSlots);
                 Thread.currentThread().interrupt();
             } else {
+                logger.error("【ERROR】{} - URL処理中にエラーが発生しました: {}", teacherName, e.getMessage());
                 logger.error("【ERROR】processUrl - URL処理中にエラーが発生しました", e);
                 logger.error("【ERROR】processUrl - URL: {}, 対象日付: {}, 時間帯: {}", url, targetDate, timeSlots);
                 logger.error("【ERROR】processUrl - エラーメッセージ: {}", e.getMessage());
@@ -250,6 +316,12 @@ public class ReservationService {
      */
     private String addDateParameterToUrl(String url, LocalDate targetDate) {
         if (url == null || targetDate == null) {
+            return url;
+        }
+        
+        // data: URLや無効なURLの場合はそのまま返す
+        if (url.startsWith("data:") || url.isEmpty() || !url.startsWith("http")) {
+            logger.warn("【WARN】addDateParameterToUrl - 無効なURLが渡されました: {}", url);
             return url;
         }
         
@@ -278,6 +350,15 @@ public class ReservationService {
                 logger.debug("dateパラメータを追加しました");
             }
             url = urlBuilder.toString();
+            
+            // 最終的なURLの検証
+            if (url.startsWith("data:") || url.isEmpty() || !url.startsWith("http")) {
+                logger.error("【ERROR】addDateParameterToUrl - 処理後に無効なURLが生成されました: {}", url);
+                throw new IllegalArgumentException("無効なURLが生成されました: " + url);
+            }
+        } catch (IllegalArgumentException e) {
+            // 無効なURLの場合は再スロー
+            throw e;
         } catch (Exception e) {
             logger.warn("URLに日付パラメータを追加する際にエラーが発生しました: {}", e.getMessage());
         }
@@ -744,12 +825,26 @@ public class ReservationService {
      * @return クリックが成功した場合true
      */
     public boolean monitorTimeSlot(WebDriver driver, String timeSlot, LocalDate targetDate, AtomicBoolean dateSuccessFlag) {
-            logger.debug("タイムスロットを監視します: {} (日付: {})", timeSlot, targetDate);
-            logger.debug("予約が解放されたら即座に予約を実行します");
+        return monitorTimeSlot(driver, timeSlot, targetDate, dateSuccessFlag, null);
+    }
+    
+    /**
+     * タイムスロットを監視してクリック（日付指定版、日付成功フラグ付き、元のURL指定版）
+     * @param driver WebDriver
+     * @param timeSlot 対象のタイムスロット（例: "20:25"）
+     * @param targetDate 対象日付（リフレッシュ後に再選択するため）
+     * @param dateSuccessFlag 日付の成功フラグ（その日の予約が成功したらtrueになる。nullの場合はチェックしない）
+     * @param originalUrl 元のURL（リフレッシュ時に使用）
+     * @return クリックが成功した場合true
+     */
+    private boolean monitorTimeSlot(WebDriver driver, String timeSlot, LocalDate targetDate, AtomicBoolean dateSuccessFlag, String originalUrl) {
+        logger.debug("タイムスロットを監視します: {} (日付: {})", timeSlot, targetDate);
+        logger.debug("予約が解放されたら即座に予約を実行します");
         
         final boolean[] success = {false};
         final String[] previousPageHash = {null}; // 前回のページハッシュを保持
         final boolean[] wasDisabled = {true}; // 前回のボタン状態（無効だったか）
+        final String[] baseUrl = {originalUrl}; // 元のURLを保持
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         
         try {
@@ -759,8 +854,9 @@ public class ReservationService {
             
             scheduler.scheduleAtFixedRate(() -> {
                 try {
-                    // この日付の予約が既に成功している場合は監視を停止
-                    if (dateSuccessFlag != null && dateSuccessFlag.get()) {
+                    // この日付の予約が既に成功している場合は監視を停止（dateSuccessFlagとDateManagerの両方をチェック）
+                    if ((dateSuccessFlag != null && dateSuccessFlag.get()) || 
+                        (dateManager != null && dateManager.getCompletedReservations().contains(targetDate))) {
                         logger.info("【STOP】monitorTimeSlot - 日付 {} の予約が既に成功しているため、監視を停止します: 時間帯={}", targetDate, timeSlot);
                         scheduler.shutdown();
                         return;
@@ -797,15 +893,60 @@ public class ReservationService {
                     if (targetDate != null) {
                         // 現在のURLを取得（ベースURLを取得）
                         String currentUrl = driver.getCurrentUrl();
-                        // ベースURLを取得（クエリパラメータを除く）
-                        String baseUrl = currentUrl.split("\\?")[0];
+                        // 有効なURLかチェック（data:, や空のURLを除外）
+                        String baseUrlToUse = null;
+                        if (currentUrl != null && !currentUrl.isEmpty() && 
+                            !currentUrl.startsWith("data:") && 
+                            currentUrl.startsWith("http")) {
+                            // ベースURLを取得（クエリパラメータを除く）
+                            baseUrlToUse = currentUrl.split("\\?")[0];
+                        } else if (baseUrl[0] != null && !baseUrl[0].isEmpty()) {
+                            // 無効なURLの場合は、元のURLを使用
+                            logger.warn("【WARN】monitorTimeSlot - 無効なURLが検出されました: {}。元のURLを使用します: {}", currentUrl, baseUrl[0]);
+                            baseUrlToUse = baseUrl[0];
+                        } else {
+                            // 元のURLも無効な場合はリフレッシュをスキップ
+                            logger.warn("【WARN】monitorTimeSlot - 無効なURLが検出されました: {}。リフレッシュをスキップします", currentUrl);
+                            return; // リフレッシュをスキップして次の監視サイクルへ（ラムダ式内なのでreturnを使用）
+                        }
                         // 日付パラメータ付きURLを作成
-                        String urlWithDate = addDateParameterToUrl(baseUrl, targetDate);
+                        String urlWithDate;
+                        try {
+                            urlWithDate = addDateParameterToUrl(baseUrlToUse, targetDate);
+                        } catch (IllegalArgumentException e) {
+                            logger.error("【ERROR】monitorTimeSlot - URLの生成に失敗しました: {}", e.getMessage());
+                            return; // URL生成失敗の場合はスキップ
+                        }
+                        
+                        // URLの検証（data:や無効なURLをチェック）
+                        if (urlWithDate == null || urlWithDate.isEmpty() || 
+                            urlWithDate.startsWith("data:") || !urlWithDate.startsWith("http")) {
+                            logger.error("【ERROR】monitorTimeSlot - 無効なURLが生成されました: {}", urlWithDate);
+                            return; // 無効なURLの場合はスキップ
+                        }
                         
                         // URLが変更されている場合は再アクセス
                         if (!currentUrl.equals(urlWithDate)) {
                             logger.debug("ページリフレッシュ後、日付パラメータ付きURLで再アクセス: {}", urlWithDate);
                             driver.get(urlWithDate);
+                            
+                            // アクセス後のURLを確認
+                            String actualUrlAfterGet = driver.getCurrentUrl();
+                            if (actualUrlAfterGet != null && (actualUrlAfterGet.startsWith("data:") || actualUrlAfterGet.isEmpty() || !actualUrlAfterGet.startsWith("http"))) {
+                                logger.error("【ERROR】monitorTimeSlot - アクセス後に無効なURLが検出されました: {}。元のURLで再試行します", actualUrlAfterGet);
+                                // 元のURLで再試行
+                                if (baseUrl[0] != null && !baseUrl[0].isEmpty()) {
+                                    try {
+                                        String retryUrl = addDateParameterToUrl(baseUrl[0], targetDate);
+                                        if (retryUrl != null && !retryUrl.isEmpty() && retryUrl.startsWith("http") && !retryUrl.startsWith("data:")) {
+                                            logger.info("【INFO】monitorTimeSlot - 元のURLで再試行: {}", retryUrl);
+                                            driver.get(retryUrl);
+                                        }
+                                    } catch (IllegalArgumentException e) {
+                                        logger.error("【ERROR】monitorTimeSlot - 再試行URLの生成に失敗しました: {}", e.getMessage());
+                                    }
+                                }
+                            }
                             // ページ読み込み待機（WebDriverWaitで最適化）
                             try {
                                 WebDriverWait wait = createWebDriverWait(driver);
@@ -1359,6 +1500,35 @@ public class ReservationService {
         } catch (Exception e) {
             logger.error("【ERROR】{} - URL/タイトル取得中にエラー: {}", methodName, e.getMessage());
         }
+    }
+    
+    /**
+     * URLから先生名を抽出
+     * @param url 先生のURL
+     * @return 先生名（抽出できない場合は"不明"）
+     */
+    private String extractTeacherNameFromUrl(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return "不明";
+        }
+        // URL形式: https://www.jicoo.com/t/_XDgWVCOgMPP/e/Teacher_Vanessa
+        // 最後の /e/ 以降を取得
+        int index = url.lastIndexOf("/e/");
+        if (index >= 0 && index + 3 < url.length()) {
+            String namePart = url.substring(index + 3);
+            // クエリパラメータやスラッシュを除去
+            int queryIndex = namePart.indexOf('?');
+            if (queryIndex >= 0) {
+                namePart = namePart.substring(0, queryIndex);
+            }
+            int slashIndex = namePart.indexOf('/');
+            if (slashIndex >= 0) {
+                namePart = namePart.substring(0, slashIndex);
+            }
+            // Teacher_Vanessa -> Teacher Vanessa に変換
+            return namePart.replace("_", " ");
+        }
+        return "不明";
     }
     
     /**

@@ -8,6 +8,7 @@ const API_BASE = "/api";
 // カレンダー用の現在の月
 let currentCalendarMonth = new Date();
 let allDates = []; // 全日付データ（カレンダー表示用）
+let availableTimeSlots = []; // 利用可能な時間帯リスト（APIから取得）
 
 // 初期化
 (function () {
@@ -15,7 +16,10 @@ let allDates = []; // 全日付データ（カレンダー表示用）
     console.log("初期化を開始します");
     try {
       // ブラウザ通知の許可をリクエスト
-      if ("Notification" in window && Notification.permission === "default") {
+      if (
+        "Notification" in globalThis &&
+        Notification.permission === "default"
+      ) {
         Notification.requestPermission().then((permission) => {
           if (permission === "granted") {
             appendLog("ブラウザ通知が有効になりました", "success");
@@ -157,6 +161,8 @@ async function loadInitialData() {
     }
     const status = await statusResponse.json();
     updateMonitoringTimeStatus(status);
+    // 監視状態に応じてボタンの状態を更新
+    updateMonitoringButtons(status.isMonitoring || false);
 
     // 日付リスト取得
     const datesResponse = await fetch(`${API_BASE}/dates`);
@@ -175,6 +181,22 @@ async function loadInitialData() {
     }
     const completed = await completedResponse.json();
     renderCompletedList(completed || []);
+
+    // 先生リスト取得
+    const teachersResponse = await fetch(`${API_BASE}/teachers`);
+    if (!teachersResponse.ok) {
+      throw new Error(`先生リスト取得エラー: ${teachersResponse.status}`);
+    }
+    const teachers = await teachersResponse.json();
+    renderTeacherList(teachers || []);
+
+    // 時間帯リスト取得
+    const timeSlotsResponse = await fetch(`${API_BASE}/time-slots`);
+    if (!timeSlotsResponse.ok) {
+      throw new Error(`時間帯リスト取得エラー: ${timeSlotsResponse.status}`);
+    }
+    availableTimeSlots = (await timeSlotsResponse.json()) || [];
+    console.log("利用可能な時間帯:", availableTimeSlots);
 
     console.log("初期データの読み込みが完了しました");
   } catch (error) {
@@ -266,7 +288,15 @@ function setupEventListeners() {
         } else {
           const errorText = await response.text();
           console.error("監視開始エラー:", response.status, errorText);
-          appendLog("監視の開始に失敗しました", "error");
+          // 既に監視中の場合は特別なメッセージを表示
+          if (response.status === 200 && errorText.includes("既に監視中")) {
+            appendLog(
+              "既に監視中です。他のタブ/ウィンドウで監視が実行されている可能性があります。",
+              "warn"
+            );
+          } else {
+            appendLog("監視の開始に失敗しました", "error");
+          }
         }
       } catch (error) {
         console.error("監視開始エラー:", error);
@@ -481,19 +511,26 @@ function renderDateList(dates) {
 
 // 時間帯チェックボックス表示
 function renderTimeSlots(date, selectedSlots) {
-  const availableSlots = [
-    "9:45",
-    "10:30",
-    "11:15",
-    "12:00",
-    "16:00",
-    "16:45",
-    "17:30",
-    "18:15",
-    "19:00",
-    "19:45",
-    "20:25",
-  ];
+  // APIから取得した時間帯リストを使用（取得できていない場合は空配列）
+  const availableSlots =
+    availableTimeSlots.length > 0
+      ? availableTimeSlots
+      : [
+          "9:45",
+          "10:30",
+          "11:15",
+          "12:00",
+          "13:00",
+          "13:45",
+          "14:30",
+          "15:15",
+          "16:00",
+          "16:45",
+          "17:30",
+          "18:15",
+          "19:00",
+          "19:45",
+        ];
 
   return availableSlots
     .map((slot) => {
@@ -611,6 +648,86 @@ globalThis.updateTimeSlots = async function updateTimeSlots(
   }
 };
 
+// 先生リスト表示
+function renderTeacherList(teachers) {
+  const container = document.getElementById("teacher-list");
+  if (!container) {
+    console.error("teacher-list 要素が見つかりません");
+    return;
+  }
+
+  container.innerHTML = "";
+
+  if (!teachers || teachers.length === 0) {
+    container.innerHTML =
+      '<p class="empty-message">先生が登録されていません</p>';
+    return;
+  }
+
+  teachers.forEach((teacher, index) => {
+    const item = document.createElement("div");
+    item.className = "teacher-item";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.id = `teacher-${index}`;
+    checkbox.dataset.url = teacher.url; // data-url属性にURLを保存
+    checkbox.checked = teacher.selected !== false; // デフォルトは選択
+    checkbox.addEventListener("change", async () => {
+      await updateSelectedTeachers();
+    });
+
+    const label = document.createElement("label");
+    label.htmlFor = `teacher-${index}`;
+    label.textContent = teacher.name || extractTeacherName(teacher.url);
+    label.className = "teacher-label";
+
+    item.appendChild(checkbox);
+    item.appendChild(label);
+    container.appendChild(item);
+  });
+}
+
+// 選択された先生を更新
+async function updateSelectedTeachers() {
+  const checkboxes = document.querySelectorAll(
+    "#teacher-list input[type='checkbox']"
+  );
+  const selectedUrls = [];
+
+  checkboxes.forEach((checkbox) => {
+    if (checkbox.checked) {
+      // data-url属性からURLを取得
+      const url = checkbox.dataset.url;
+      if (url) {
+        selectedUrls.push(url);
+      }
+    }
+  });
+
+  try {
+    const response = await fetch(`${API_BASE}/teachers/selected`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(selectedUrls),
+    });
+
+    if (response.ok) {
+      appendLog(
+        `選択された先生を更新しました: ${selectedUrls.length}名`,
+        "success"
+      );
+    } else {
+      const errorText = await response.text();
+      console.error("先生選択更新エラー:", response.status, errorText);
+      appendLog("先生選択の更新に失敗しました", "error");
+    }
+  } catch (error) {
+    console.error("先生選択更新エラー:", error);
+    appendLog("先生選択の更新に失敗しました: " + error.message, "error");
+  }
+}
+
 // 予約完了リスト表示
 function renderCompletedList(completed) {
   const container = document.getElementById("completed-list");
@@ -650,6 +767,12 @@ function renderCompletedList(completed) {
       const timeSlots = item.timeSlots || [];
       const teacherUrl = item.teacherUrl || "";
 
+      // デバッグ: teacherUrlが正しく取得できているか確認
+      if (!teacherUrl && item) {
+        console.debug("予約完了データ:", item);
+        console.debug("teacherUrlが空です。date:", dateStr);
+      }
+
       const date = new Date(dateStr);
       date.setHours(0, 0, 0, 0);
       const formattedDate = date.toLocaleDateString("ja-JP", {
@@ -685,18 +808,39 @@ function renderCompletedList(completed) {
         `;
       }
 
-      // 先生名を表示
+      // 先生名を表示（クリック可能なリンク）
       let teacherDisplay = "";
-      if (teacherUrl) {
+      if (teacherUrl && teacherUrl.trim() !== "") {
         const teacherName = extractTeacherName(teacherUrl);
         if (teacherName) {
+          // HTMLエスケープ
+          const escapedUrl = teacherUrl
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+          const escapedName = teacherName
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
           teacherDisplay = `
             <div class="reservation-teacher">
               <span class="teacher-label">👤 先生:</span>
-              <span class="teacher-name">${teacherName}</span>
+              <a href="${escapedUrl}" target="_blank" rel="noopener noreferrer" class="teacher-name-link">${escapedName}</a>
+            </div>
+          `;
+        } else {
+          // 先生名が抽出できない場合でもURLを表示
+          const escapedUrl = teacherUrl
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+          teacherDisplay = `
+            <div class="reservation-teacher">
+              <span class="teacher-label">👤 先生URL:</span>
+              <a href="${escapedUrl}" target="_blank" rel="noopener noreferrer" class="teacher-name-link">${escapedUrl}</a>
             </div>
           `;
         }
+      } else {
+        // デバッグ用: teacherUrlが空の場合のログ
+        console.debug("teacherUrlが空です。item:", item);
       }
 
       // 日付が過ぎている場合は+40分を追加
@@ -808,6 +952,25 @@ function appendLog(message, level = "info") {
     for (let i = 0; i < logs.length - 1000; i++) {
       logs[i].remove();
     }
+  }
+}
+
+// 監視ボタンの状態を更新
+function updateMonitoringButtons(isMonitoring) {
+  const startBtn = document.getElementById("start-btn");
+  const stopBtn = document.getElementById("stop-btn");
+
+  if (startBtn) {
+    startBtn.disabled = isMonitoring;
+  }
+  if (stopBtn) {
+    stopBtn.disabled = !isMonitoring;
+  }
+
+  if (isMonitoring) {
+    updateStatus("実行中");
+  } else {
+    updateStatus("停止");
   }
 }
 
@@ -962,7 +1125,7 @@ function showReservationNotification(
   }
 
   // ブラウザの通知APIを使用（許可されている場合）
-  if ("Notification" in window && Notification.permission === "granted") {
+  if ("Notification" in globalThis && Notification.permission === "granted") {
     new Notification("予約完了", {
       body: `日付: ${formattedDate}${timeSlotText}${teacherText}`,
       icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>",

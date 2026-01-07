@@ -23,11 +23,12 @@ public class JicooReservationBot {
     private static final String RETRY_INTERRUPTED_MSG = "再試行待機中に中断されました";
     private static final long RETRY_WAIT_MS = 60000L; // 1分
     private static final long SLEEP_RECOVERY_WAIT_MS = 120000L; // 2分
-    private static final long SLEEP_DETECTION_THRESHOLD_MS = 300000L; // 5分
+    private static final long SLEEP_DETECTION_THRESHOLD_MS = 60000L; // 1分（スリープ検知の感度を上げる）
     private static final long MONITORING_CHECK_INTERVAL_MS = 1000L; // 1秒
     
     private final Config config;
     private final ReservationService reservationService;
+    private final DateManager dateManager;
     private WebDriver driver;
     private ReservationCallback guiCallback;
     private volatile boolean isMonitoring = false; // 監視中フラグ
@@ -74,6 +75,15 @@ public class JicooReservationBot {
     public JicooReservationBot() {
         this.config = Config.getInstance();
         this.reservationService = new ReservationService(config);
+        this.dateManager = new DateManager();
+    }
+    
+    public JicooReservationBot(Config config, ReservationService reservationService, DateManager dateManager) {
+        this.config = config;
+        this.reservationService = reservationService;
+        this.dateManager = dateManager;
+        // ReservationServiceにDateManagerを設定（予約完了状態を共有するため）
+        reservationService.setDateManager(dateManager);
     }
     
     /**
@@ -127,6 +137,12 @@ public class JicooReservationBot {
      * @param datesWithTimeSlots 日付と時間帯のマッピング（nullの場合は1週間後を使用）
      */
     public void startMonitoring(Map<LocalDate, List<String>> datesWithTimeSlots) {
+        // 既に監視中の場合は新規監視を開始しない
+        if (isMonitoring) {
+            logger.warn("既に監視中です。新しい監視を開始しません。");
+            return;
+        }
+        
         logger.info("監視を開始します");
         isMonitoring = true;
         shouldStopMonitoring = false;
@@ -142,8 +158,20 @@ public class JicooReservationBot {
                 config.getMonitoringStartHour(), config.getMonitoringEndHour());
         }
         
-        // URLリストを取得
-        List<String> urls = new ArrayList<>(config.getUrls()); // 元のリストを変更しないようにコピー
+        // URLリストを取得（選択された先生のみ）
+        List<String> allUrls = config.getUrls();
+        List<String> selectedUrls = dateManager.getSelectedTeacherUrls();
+        
+        // 選択された先生のURLのみを使用（選択されていない場合はすべて使用）
+        List<String> urls;
+        if (selectedUrls != null && !selectedUrls.isEmpty()) {
+            urls = new ArrayList<>(selectedUrls);
+            logger.info("選択された先生のみを監視対象にします: {}件", urls.size());
+        } else {
+            urls = new ArrayList<>(allUrls);
+            logger.info("すべての先生を監視対象にします: {}件", urls.size());
+        }
+        
         if (urls.isEmpty()) {
             logger.error("監視対象URLが設定されていません");
             return;
@@ -199,20 +227,22 @@ public class JicooReservationBot {
             for (String url : urls) {
                 final LocalDate date = targetDate; // ラムダ式で使用するためfinal
                 final List<String> finalTimeSlots = new ArrayList<>(timeSlots); // ラムダ式で使用するためfinal
+                final String finalUrl = url; // ラムダ式で使用するためfinal（teacherUrlとして使用）
                 executor.submit(() -> {
                     // 失敗しても監視を継続する無限ループ
                     WebDriver urlDriver = null; // スコープを広げるため、ループの外で宣言
                     while (isMonitoring && !shouldStopMonitoring) {
                         try {
                             // この日付の予約が既に成功している場合はスキップ
-                            if (dateSuccessMap.get(date).get()) {
-                                logger.info("日付 {} の予約が既に成功しているため、このタスクを終了します: URL={}", date, url);
+                            // DateManagerの完了リストもチェック（複数タブ/ウィンドウ間で状態を共有）
+                            if (dateSuccessMap.get(date).get() || dateManager.getCompletedReservations().contains(date)) {
+                                logger.info("日付 {} の予約が既に成功しているため、このタスクを終了します: URL={}", date, finalUrl);
                                 latch.countDown();
                                 return;
                             }
                             
                             logger.info(SEPARATOR);
-                            logger.info("監視開始: 日付={}, URL={}, 時間帯={}", date, url, finalTimeSlots);
+                            logger.info("監視開始: 日付={}, URL={}, 時間帯={}", date, finalUrl, finalTimeSlots);
                             logger.info(SEPARATOR);
                             
                             // このURL×日付の組み合わせ用に新しいWebDriverを作成（既に存在する場合は再作成しない）
@@ -224,7 +254,7 @@ public class JicooReservationBot {
                                 );
                                 
                                 if (urlDriver == null) {
-                                    logger.error("WebDriverの作成に失敗しました: 日付={}, URL={}", date, url);
+                                    logger.error("WebDriverの作成に失敗しました: 日付={}, URL={}", date, finalUrl);
                                     // WebDriver作成失敗時は1分待機してから再試行
                                     logger.info("1分後に再試行します...");
                                     try {
@@ -243,27 +273,29 @@ public class JicooReservationBot {
                                 // スリープモード検知：システム時間の大きな変化をチェック
                                 long currentTime = System.currentTimeMillis();
                                 long timeDiff = currentTime - lastActivityTime;
-                                if (timeDiff > SLEEP_DETECTION_THRESHOLD_MS) { // 5分以上の時間差がある場合（スリープから復帰した可能性）
-                                    logger.warn("【スリープ検知】システム時間の大きな変化を検知しました（{}分）。スリープから復帰した可能性があります", timeDiff / 60000);
+                                if (timeDiff > SLEEP_DETECTION_THRESHOLD_MS) { // 1分以上の時間差がある場合（スリープから復帰した可能性）
+                                    logger.warn("【スリープ検知】システム時間の大きな変化を検知しました（{}秒）。スリープから復帰した可能性があります", timeDiff / 1000);
                                     logger.warn("【スリープ検知】WebDriverを再作成して監視を再開します");
                                     // WebDriverをクリーンアップして再作成
                                     DriverManager.closeWebDriver(urlDriver, true); // silent=trueでエラーを無視
                                     urlDriver = null; // 再作成のためnullに設定
                                     lastActivityTime = currentTime;
+                                    // スリープから復帰したことをログに記録
+                                    logger.info("【スリープ復帰】監視を自動的に再開します: 日付={}, URL={}", date, finalUrl);
                                 } else {
                                     lastActivityTime = currentTime;
                                 }
                                 
                                 // WebDriverが無効な場合は再作成
                                 if (urlDriver == null) {
-                                    logger.info("WebDriverを再作成します: 日付={}, URL={}", date, url);
+                                    logger.info("WebDriverを再作成します: 日付={}, URL={}", date, finalUrl);
                                     urlDriver = DriverManager.createWebDriver(
                                         config.isHeadless(),
                                         config.getTimeoutSeconds(),
                                         config.getImplicitWaitSeconds()
                                     );
                                     if (urlDriver == null) {
-                                        logger.error("WebDriverの再作成に失敗しました: 日付={}, URL={}", date, url);
+                                        logger.error("WebDriverの再作成に失敗しました: 日付={}, URL={}", date, finalUrl);
                                         // 1分待機してから再試行
                                         try {
                                             Thread.sleep(RETRY_WAIT_MS);
@@ -287,8 +319,9 @@ public class JicooReservationBot {
                                 }
                                 
                                 // この日付の予約が既に成功している場合は処理を中断
-                                if (dateSuccessMap.get(date).get()) {
-                                    logger.info("日付 {} の予約が既に成功しているため、処理を中断します: URL={}", date, url);
+                                // DateManagerの完了リストもチェック（複数タブ/ウィンドウ間で状態を共有）
+                                if (dateSuccessMap.get(date).get() || dateManager.getCompletedReservations().contains(date)) {
+                                    logger.info("日付 {} の予約が既に成功しているため、処理を中断します: URL={}", date, finalUrl);
                                     return;
                                 }
                                 
@@ -302,13 +335,13 @@ public class JicooReservationBot {
                                             logger.info("日付 {} の予約が成功したため、処理を中断します", date);
                                             return false;
                                         }
-                                        return reservationService.processUrl(finalUrlDriver, url, date, finalTimeSlots, dateSuccessMap.get(date));
+                                        return reservationService.processUrl(finalUrlDriver, finalUrl, date, finalTimeSlots, dateSuccessMap.get(date));
                                     },
                                     config.getMaxRetries()
                                 );
                                 
                                 if (success) {
-                                    logger.info("予約が成功しました！日付: {}, URL: {}", date, url);
+                                    logger.info("予約が成功しました！日付: {}, URL: {}", date, finalUrl);
                                     overallSuccess.set(true);
                                     
                                     // この日付の成功フラグを設定（この日の他のタスクを停止）
@@ -317,17 +350,48 @@ public class JicooReservationBot {
                                     
                                     // GUIに結果を通知（時間帯と先生URL付き）
                                     if (guiCallback != null) {
-                                        guiCallback.onReservationResult(date, true, finalTimeSlots, url);
+                                        logger.info("予約成功コールバック呼び出し: 日付={}, 時間帯={}, 先生URL={}", date, finalTimeSlots, finalUrl);
+                                        guiCallback.onReservationResult(date, true, finalTimeSlots, finalUrl);
+                                    } else {
+                                        logger.warn("予約成功しましたが、guiCallbackがnullです: 日付={}, URL={}", date, finalUrl);
                                     }
                                     
                                     // 予約成功時はWebDriverをクローズせず、ブラウザを開いたままにする
-                                    logger.info("予約が成功したため、ブラウザを開いたままにします: URL={}", url);
+                                    logger.info("予約が成功したため、ブラウザを開いたままにします: URL={}", finalUrl);
                                     urlDriver = null; // 参照を解除するが、ブラウザは開いたまま
+                                    
+                                    // 予約成功時にシステムを終了
+                                    logger.info(SEPARATOR);
+                                    logger.info("予約が成功したため、システムを終了します");
+                                    logger.info(SEPARATOR);
+                                    
+                                    // 監視を停止
+                                    shouldStopMonitoring = true;
+                                    isMonitoring = false;
+                                    
+                                    // ExecutorServiceをシャットダウン（非同期で実行し、タイムアウト後に強制終了）
+                                    new Thread(() -> {
+                                        try {
+                                            shutdownExecutorService(executor);
+                                        } catch (Exception e) {
+                                            logger.warn("ExecutorServiceのシャットダウン中にエラーが発生しました（無視して続行）: {}", e.getMessage());
+                                        }
+                                        
+                                        // システムを終了
+                                        try {
+                                            Thread.sleep(2000); // 2秒待機してから終了（ログの出力を待つ）
+                                        } catch (InterruptedException e) {
+                                            Thread.currentThread().interrupt();
+                                        }
+                                        logger.info("システムを終了します");
+                                        System.exit(0);
+                                    }, "SystemShutdownThread").start();
+                                    
                                     break;
                                 } else {
                                     // この日付の予約が既に成功している場合は失敗として扱わない
                                     if (!dateSuccessMap.get(date).get()) {
-                                        logger.warn("URL処理に失敗しました: 日付={}, URL={}", date, url);
+                                        logger.warn("URL処理に失敗しました: 日付={}, URL={}", date, finalUrl);
                                         logger.info("1分後に再試行します...");
                                         if (guiCallback != null) {
                                             guiCallback.onReservationResult(date, false);
@@ -381,7 +445,7 @@ public class JicooReservationBot {
                                 }
                             }
                         } catch (Exception e) {
-                            logger.error("並行処理中にエラーが発生しました: 日付={}, URL={}", date, url, e);
+                            logger.error("並行処理中にエラーが発生しました: 日付={}, URL={}", date, finalUrl, e);
                             
                             // WebDriverが切断された可能性がある場合は再作成
                             if (urlDriver != null) {

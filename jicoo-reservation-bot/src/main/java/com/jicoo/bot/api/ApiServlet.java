@@ -14,6 +14,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -138,6 +139,7 @@ public class ApiServlet extends HttpServlet {
         if (path.equals("/status")) {
             Map<String, Object> status = new HashMap<>();
             status.put("running", server.isRunning());
+            status.put("isMonitoring", bot.isMonitoring()); // 監視中かどうか
             Config config = Config.getInstance();
             status.put("monitoringTimeRestriction", config.isMonitoringTimeRestrictionEnabled());
             status.put("monitoringStartHour", config.getMonitoringStartHour());
@@ -168,6 +170,24 @@ public class ApiServlet extends HttpServlet {
             configMap.put("monitoringIntervalSeconds", config.getMonitoringIntervalSeconds());
             configMap.put("monitoringTimeRestriction", config.isMonitoringTimeRestrictionEnabled());
             return gson.toJson(configMap);
+        } else if (path.equals("/teachers")) {
+            // 利用可能な先生のリストを取得
+            Config config = Config.getInstance();
+            List<String> allUrls = config.getUrls();
+            List<String> selectedUrls = dateManager.getSelectedTeacherUrls();
+            
+            List<Map<String, Object>> teachers = new ArrayList<>();
+            for (String url : allUrls) {
+                Map<String, Object> teacher = new HashMap<>();
+                teacher.put("url", url);
+                teacher.put("name", extractTeacherName(url));
+                teacher.put("selected", selectedUrls.contains(url));
+                teachers.add(teacher);
+            }
+            return gson.toJson(teachers);
+        } else if (path.equals("/time-slots")) {
+            // 利用可能な時間帯のリストを取得
+            return gson.toJson(DateManager.AVAILABLE_TIME_SLOTS);
         } else {
             throw new IllegalArgumentException(UNKNOWN_ENDPOINT_MSG + path);
         }
@@ -247,9 +267,43 @@ public class ApiServlet extends HttpServlet {
             Config.getInstance().setMonitoringTimeRestrictionEnabled(enabled);
             
             return createSuccessResponse("監視時間制限を更新しました");
+        } else if (path.equals("/teachers/selected")) {
+            // 選択された先生のURLリストを更新
+            @SuppressWarnings("unchecked")
+            List<String> selectedUrls = (List<String>) gson.fromJson(body, List.class);
+            dateManager.setSelectedTeacherUrls(selectedUrls);
+            
+            return createSuccessResponse("選択された先生を更新しました");
         } else {
             throw new IllegalArgumentException(UNKNOWN_ENDPOINT_MSG + path);
         }
+    }
+    
+    /**
+     * URLから先生名を抽出
+     */
+    private String extractTeacherName(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return "";
+        }
+        // URL形式: https://www.jicoo.com/t/_XDgWVCOgMPP/e/Teacher_Vanessa
+        // 最後の /e/ 以降を取得
+        int index = url.lastIndexOf("/e/");
+        if (index >= 0 && index + 3 < url.length()) {
+            String namePart = url.substring(index + 3);
+            // クエリパラメータやスラッシュを除去
+            int queryIndex = namePart.indexOf('?');
+            if (queryIndex >= 0) {
+                namePart = namePart.substring(0, queryIndex);
+            }
+            int slashIndex = namePart.indexOf('/');
+            if (slashIndex >= 0) {
+                namePart = namePart.substring(0, slashIndex);
+            }
+            // Teacher_Vanessa -> Teacher Vanessa に変換
+            return namePart.replace("_", " ");
+        }
+        return "";
     }
     
     private String handleDeleteRequest(String path) {

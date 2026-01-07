@@ -88,6 +88,9 @@ GUI アプリケーションが起動します。以下の操作が可能です�
 - `jicoo.target.time`: 対象時間（例: 20:25）
 - `jicoo.monitoring.interval.seconds`: 監視間隔（秒）
 - `webdriver.headless`: ヘッドレスモード（true/false）
+- `sleep.prevent.enabled`: スリープモード防止（true/false）
+  - `true`（推奨）: 監視中はスリープモードに入らないようにする
+  - `false`: スリープモードを許可（スリープから復帰時に自動的に監視を再開）
 
 ## ログ
 

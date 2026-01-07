@@ -43,6 +43,7 @@ public class Config {
     private final int emailMonitoringInterval;
     private final String emailSenderFilter;
     private final String emailSubjectFilter;
+    private final boolean sleepPreventEnabled;
     private static final ZoneId JAPAN_ZONE = ZoneId.of("Asia/Tokyo");
     
     private Config() {
@@ -57,7 +58,7 @@ public class Config {
         if (props.isEmpty() || urlsStr.isEmpty()) {
             logger.warn("application.propertiesからURLが読み込めませんでした。デフォルトURLを使用します。");
             // デフォルトURLを設定
-            urlsStr = "https://www.jicoo.com/t/_XDgWVCOgMPP/e/Teacher_Vanessa,https://www.jicoo.com/t/_XDgWVCOgMPP/e/Jozelly,https://www.jicoo.com/t/_XDgWVCOgMPP/e/Teacher_Lorna,https://www.jicoo.com/t/_XDgWVCOgMPP/e/namie";
+            urlsStr = "https://www.jicoo.com/t/_XDgWVCOgMPP/e/Teacher_Vanessa,https://www.jicoo.com/en/t/_XDgWVCOgMPP/e/Jozelly,https://www.jicoo.com/en/t/_XDgWVCOgMPP/e/Teacher_Lorna,https://www.jicoo.com/en/t/_XDgWVCOgMPP/e/namie";
             logger.info("デフォルトURL文字列: [{}]", urlsStr);
         }
         
@@ -79,11 +80,11 @@ public class Config {
         this.password = props.getProperty("jicoo.login.password", "uluru2024");
         
         // 予約情報
-        this.reservationName = props.getProperty("jicoo.reservation.name", "道川正隆");
+        this.reservationName = props.getProperty("jicoo.reservation.name", "Masataka");
         this.reservationEmail = props.getProperty("jicoo.reservation.email", "masataaaka3@icloud.com");
         
         // 監視設定
-        this.targetTime = props.getProperty("jicoo.target.time", "20:25");
+        this.targetTime = props.getProperty("jicoo.target.time", "");
         this.monitoringIntervalSeconds = Integer.parseInt(
             props.getProperty("jicoo.monitoring.interval.seconds", "5"));
         this.maxRetries = Integer.parseInt(
@@ -116,8 +117,12 @@ public class Config {
         this.emailSenderFilter = props.getProperty("email.sender.filter", "jicoo.com");
         this.emailSubjectFilter = props.getProperty("email.subject.filter", "予約");
         
-        logger.info("設定を読み込みました: URL数={}, 対象時間={}, 監視間隔={}秒, 監視時間={}時〜{}時（日本時間）", 
-            urls.size(), targetTime, monitoringIntervalSeconds, monitoringStartHour, monitoringEndHour);
+        // スリープモード設定
+        this.sleepPreventEnabled = Boolean.parseBoolean(
+            props.getProperty("sleep.prevent.enabled", "true"));
+        
+        logger.info("設定を読み込みました: URL数={}, 対象時間={}, 監視間隔={}秒, 監視時間={}時〜{}時（日本時間）, スリープ防止={}", 
+            urls.size(), targetTime, monitoringIntervalSeconds, monitoringStartHour, monitoringEndHour, sleepPreventEnabled);
         if (emailMonitoringEnabled) {
             logger.info("メール監視: 有効, ホスト={}, 間隔={}秒", emailImapHost, emailMonitoringInterval);
         }
@@ -299,7 +304,7 @@ public class Config {
      * @param enabled 有効にする場合true
      */
     public void setMonitoringTimeRestrictionEnabled(boolean enabled) {
-        this.monitoringTimeRestrictionEnabled = enabled;
+        Config.monitoringTimeRestrictionEnabled = enabled;
         logger.info("監視時間制限を{}に設定しました", enabled ? "有効" : "無効");
     }
     
@@ -395,6 +400,14 @@ public class Config {
     
     public String getEmailSubjectFilter() {
         return emailSubjectFilter;
+    }
+    
+    /**
+     * スリープモード防止が有効かどうかを取得
+     * @return 有効の場合true
+     */
+    public boolean isSleepPreventEnabled() {
+        return sleepPreventEnabled;
     }
 }
 

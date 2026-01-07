@@ -144,6 +144,16 @@ public class WebSocketHandler implements WebSocketListener {
         broadcast(gson.toJson(statusMessage));
     }
     
+    /**
+     * カスタムメッセージをブロードキャスト
+     */
+    public static void broadcastMessage(String type, Map<String, Object> data) {
+        Map<String, Object> message = new HashMap<>(data.size() + 1);
+        message.put("type", type);
+        message.putAll(data);
+        broadcast(gson.toJson(message));
+    }
+    
     private static void broadcast(String message) {
         sessions.removeIf(session -> {
             try {
